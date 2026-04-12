@@ -13,6 +13,16 @@
 const CONCURRENCY         = 1;    // sequential tabs — prevents cross-tab price contamination on GTBuy SPA
 const TAB_STAGGER_MS      = 400;  // ms between tab opens (GTBuy rate-limit friendliness)
 const GTBUY_WAREHOUSE_URL = "https://gtbuy.com/user/warehouse";
+const GTBUY_ORDERS_URL    = "https://gtbuy.com/user/order";
+
+// ── CSV export state ──────────────────────────────────────────────────────────
+
+/**
+ * Tab opened by the extension to scrape all order pages for CSV export.
+ * Null when no export is in progress.
+ * @type {number|null}
+ */
+let exportTabId = null;
 
 // ── In-memory optimization state ──────────────────────────────────────────────
 
@@ -83,6 +93,47 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ error: e.message }));
     return true;
+  }
+
+  // ── CSV Export flow ───────────────────────────────────────────────────────
+
+  // Popup triggers export: open a background orders tab for paginated scraping
+  if (message.type === "START_ORDERS_SCRAPE") {
+    // Close any previous export tab that might be lingering
+    if (exportTabId !== null) {
+      chrome.tabs.remove(exportTabId).catch(() => {});
+      exportTabId = null;
+    }
+    chrome.tabs.create({ url: GTBUY_ORDERS_URL, active: false })
+      .then((tab) => {
+        exportTabId = tab.id;
+        sendResponse({ ok: true });
+      })
+      .catch((e) => sendResponse({ error: e.message }));
+    return true; // async
+  }
+
+  // Content script in the export tab asks if it should run the full scrape
+  if (message.type === "GET_EXPORT_TASK") {
+    const isExportTab = (sender.tab?.id === exportTabId);
+    sendResponse({ isExportTab });
+    return;
+  }
+
+  // Progress update from the export tab content script → forward to popup
+  if (message.type === "ORDERS_SCRAPE_PROGRESS") {
+    chrome.runtime.sendMessage(message).catch(() => {});
+    return;
+  }
+
+  // Export tab finished all pages → close it and notify popup
+  if (message.type === "ORDERS_SCRAPE_DONE") {
+    if (exportTabId !== null) {
+      chrome.tabs.remove(exportTabId).catch(() => {});
+      exportTabId = null;
+    }
+    chrome.runtime.sendMessage(message).catch(() => {});
+    return;
   }
 
   // Content script in a split tab asks which items to pre-select.

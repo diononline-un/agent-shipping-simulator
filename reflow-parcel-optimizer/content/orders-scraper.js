@@ -266,4 +266,111 @@ function storeOrders(freshOrders, sourceUrl) {
   });
 }
 
-if (typeof module !== "undefined") module.exports = { scrapeOrders, storeOrders };
+// ── Pagination + full export flow ─────────────────────────────────────────────
+
+/**
+ * Detect the "next page" control in GTBuy's pagination bar.
+ * Supports Ant Design pagination (most common in GTBuy) and generic patterns.
+ * Returns the clickable element, or null if on the last page.
+ *
+ * @returns {Element|null}
+ */
+function findNextPageButton() {
+  // Ant Design: li.ant-pagination-next that is not disabled
+  const ant = document.querySelector(
+    "li.ant-pagination-next:not(.ant-pagination-disabled)"
+  );
+  if (ant) return ant.querySelector("button") || ant;
+
+  // Generic: any element whose text is ">" / "›" / "Next" / "下一页"
+  // and which is not marked disabled
+  return Array.from(document.querySelectorAll("li, button, a, span")).find((el) => {
+    if (
+      el.hasAttribute("disabled") ||
+      el.classList.contains("disabled") ||
+      el.getAttribute("aria-disabled") === "true"
+    ) return false;
+    const t = el.textContent.trim();
+    return t === ">" || t === "›" || t === "→" ||
+           /^next(\s*page)?$/i.test(t) || t === "下一页";
+  }) || null;
+}
+
+/**
+ * Wait until at least one order card is present in the DOM,
+ * or the timeout expires (resolves regardless — scrapeOrders will return 0 items).
+ *
+ * @param {number} timeout  ms
+ * @returns {Promise<void>}
+ */
+function waitForOrderCards(timeout = 8000) {
+  return new Promise((resolve) => {
+    // Already present?
+    if (document.querySelector &&
+        document.body.textContent.match(ORDER_ID_RE)) {
+      return resolve();
+    }
+    const timer = setTimeout(resolve, timeout);
+    const obs   = new MutationObserver(() => {
+      if (document.body.textContent.match(ORDER_ID_RE)) {
+        clearTimeout(timer);
+        obs.disconnect();
+        setTimeout(resolve, 400); // brief settle after content appears
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
+/**
+ * Full paginated orders scrape — intended for the background-opened export tab.
+ *
+ * Flow per page:
+ *  1. Wait for order cards to appear
+ *  2. Scrape current page
+ *  3. Store (merge) results
+ *  4. Send ORDERS_SCRAPE_PROGRESS to background
+ *  5. Click "next page" if available, else stop
+ *
+ * Sends ORDERS_SCRAPE_DONE when complete.
+ *
+ * @param {Object} agentConfig
+ * @returns {Promise<void>}
+ */
+async function runOrdersScrapeFlow(agentConfig) {
+  const MAX_PAGES   = 20;
+  let   totalOrders = 0;
+
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    await waitForOrderCards(8000);
+
+    const { orders, count } = scrapeOrders(agentConfig);
+    if (count > 0) {
+      await storeOrders(orders, window.location.href);
+      totalOrders += count;
+    }
+
+    chrome.runtime.sendMessage({
+      type:   "ORDERS_SCRAPE_PROGRESS",
+      page,
+      count:  totalOrders,
+    }).catch(() => {});
+
+    const nextBtn = findNextPageButton();
+    if (!nextBtn) break; // last page
+
+    nextBtn.click();
+    // Wait for the NEW page content to arrive before looping
+    await new Promise((r) => setTimeout(r, 600));
+    await waitForOrderCards(8000);
+    // Give SPA a moment to fully re-render
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  chrome.runtime.sendMessage({
+    type:  "ORDERS_SCRAPE_DONE",
+    count: totalOrders,
+  }).catch(() => {});
+}
+
+if (typeof module !== "undefined") module.exports = { scrapeOrders, storeOrders, runOrdersScrapeFlow };

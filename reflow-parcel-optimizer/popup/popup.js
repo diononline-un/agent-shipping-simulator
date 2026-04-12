@@ -38,6 +38,7 @@ const maxPackagesSelect   = document.getElementById("max-packages-select");
 const durationEstimate    = document.getElementById("duration-estimate");
 const exportCsvBtn        = document.getElementById("export-csv-btn");
 const exportOrdersHint    = document.getElementById("export-orders-hint");
+const exportProgress      = document.getElementById("export-progress");
 
 // ── App state ──────────────────────────────────────────────────────────────────
 
@@ -220,6 +221,19 @@ chrome.runtime.onMessage.addListener((message) => {
       debugPanel.style.display = "block";
       debugToggle.textContent = "🐛 Debug ▲";
     }
+  }
+
+  // ── CSV Export progress ────────────────────────────────────────────────────
+
+  if (message.type === "ORDERS_SCRAPE_PROGRESS") {
+    exportProgress.textContent =
+      `Seite ${message.page} gescrapt — ${message.count} Bestellungen gefunden...`;
+    exportCsvBtn.textContent = `Seite ${message.page}...`;
+  }
+
+  if (message.type === "ORDERS_SCRAPE_DONE") {
+    exportProgress.textContent = `${message.count} Bestellungen geladen — CSV wird erstellt...`;
+    finishExport();
   }
 });
 
@@ -527,27 +541,51 @@ async function updateExportHint() {
 }
 
 exportCsvBtn.addEventListener("click", async () => {
-  exportCsvBtn.disabled     = true;
-  exportCsvBtn.textContent  = "Wird erstellt...";
+  exportCsvBtn.disabled    = true;
+  exportCsvBtn.textContent = "Öffne Bestellungsseite...";
+  exportOrdersHint.style.display = "none";
+  exportProgress.style.display   = "block";
+  exportProgress.textContent     = "Seite 1 wird geladen...";
 
-  try {
-    const stored = await new Promise((resolve) => {
-      chrome.storage.local.get(["reflow_orders"], resolve);
-    });
-    const orders = stored.reflow_orders || [];
-
-    const csv      = buildCSV(allItems, orders);
-    const date     = new Date().toISOString().slice(0, 10);
-    const filename = `reflow-warehouse-${date}.csv`;
-
-    downloadCSV(csv, filename);
-  } catch (err) {
-    console.error("[ReFlow] CSV export failed:", err);
-  } finally {
-    exportCsvBtn.disabled    = false;
-    exportCsvBtn.textContent = "📥 Als CSV exportieren";
+  // Persist current warehouse items so the background can also access them
+  if (allItems.length > 0) {
+    chrome.storage.local.set({ reflow_warehouse_items: allItems });
   }
+
+  // Tell background to open the orders tab — it will paginate automatically
+  const resp = await sendToContent({ type: "START_ORDERS_SCRAPE" }).catch(() => ({}));
+  if (resp.error) {
+    exportProgress.textContent = `Fehler: ${resp.error}`;
+    resetExportBtn();
+  }
+  // Progress + completion arrive via onMessage listener below
 });
+
+function resetExportBtn() {
+  exportCsvBtn.disabled    = false;
+  exportCsvBtn.textContent = "📥 Als CSV exportieren";
+  exportProgress.style.display   = "none";
+  exportOrdersHint.style.display = "block";
+}
+
+async function finishExport() {
+  const stored = await new Promise((resolve) => {
+    chrome.storage.local.get(["reflow_orders", "reflow_warehouse_items"], resolve);
+  });
+
+  // Use in-memory allItems if available (fresher), otherwise use stored items
+  const items  = allItems.length > 0 ? allItems : (stored.reflow_warehouse_items || []);
+  const orders = stored.reflow_orders || [];
+
+  const csv      = buildCSV(items, orders);
+  const date     = new Date().toISOString().slice(0, 10);
+  downloadCSV(csv, `reflow-warehouse-${date}.csv`);
+
+  exportProgress.style.display   = "none";
+  exportOrdersHint.style.display = "block";
+  resetExportBtn();
+  updateExportHint();
+}
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 

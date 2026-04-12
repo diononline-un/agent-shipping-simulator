@@ -17,7 +17,7 @@
  *    - Background closes the tab when done
  */
 
-/* globals gtbuyConfig, scrapeItems, scrapeOrders, storeOrders,
+/* globals gtbuyConfig, scrapeItems, scrapeOrders, storeOrders, runOrdersScrapeFlow,
            simulateCandidate, generateCandidates,
            waitFor, warehousePresent, WAREHOUSE_RELOAD_TIMEOUT_MS */
 
@@ -65,8 +65,7 @@ function init() {
     // Check if this tab was opened by "In Tab öffnen" and has a group to pre-select
     checkForSplitTask();
   } else if (activeAgent.isOrdersPage(window.location.href)) {
-    // Auto-scrape orders page so export can include price + URL data
-    refreshOrders();
+    checkForExportTask(); // async — handles both export-tab and normal browsing
   }
 
   // Re-scrape when SPA navigates
@@ -77,6 +76,7 @@ function init() {
       if (!isTaskTab && activeAgent.isWarehousePage(lastUrl)) {
         setTimeout(refreshItems, 800);
       } else if (activeAgent.isOrdersPage(lastUrl)) {
+        // SPA nav within orders page — don't re-run export flow, just normal refresh
         setTimeout(refreshOrders, 800);
       }
     }
@@ -89,6 +89,13 @@ function refreshItems() {
   cachedItems = items;
   if (error) console.warn(error);
   chrome.runtime.sendMessage({ type: "ITEMS_DETECTED", count: items.length });
+  // Persist across popup open/close so export works even when user navigates away
+  if (items.length > 0) {
+    chrome.storage.local.set({
+      reflow_warehouse_items:    serializeItems(items),
+      reflow_warehouse_items_ts: Date.now(),
+    });
+  }
 }
 
 function refreshOrders() {
@@ -97,6 +104,25 @@ function refreshOrders() {
   if (count > 0) {
     storeOrders(orders, window.location.href);
     chrome.runtime.sendMessage({ type: "ORDERS_DETECTED", count }).catch(() => {});
+  }
+}
+
+/**
+ * Called when the content script loads on the orders page.
+ * Asks the background whether this tab was opened for a CSV export.
+ * If yes: runs the full paginated scrape and signals completion.
+ * If no:  does a normal single-page scrape and stores the result.
+ */
+async function checkForExportTask() {
+  const response = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "GET_EXPORT_TASK" }, (r) => resolve(r || {}));
+  });
+
+  if (response.isExportTab) {
+    // Full paginated scrape — sends ORDERS_SCRAPE_PROGRESS + ORDERS_SCRAPE_DONE
+    await runOrdersScrapeFlow(activeAgent);
+  } else {
+    refreshOrders();
   }
 }
 
