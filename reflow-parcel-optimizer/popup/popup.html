@@ -14,13 +14,35 @@
     <span class="tagline">Parcel Optimizer</span>
   </header>
 
-  <!-- ── State: no-warehouse ─────────────────────────────────────────────── -->
-  <div id="state-no-warehouse" class="state active">
-    <div class="empty-icon">📦</div>
-    <p class="empty-text">Öffne dein <strong>GTBuy Warehouse</strong> und klicke dann hier.</p>
+  <!-- ── State: not-gtbuy (falsche Seite) ───────────────────────────────── -->
+  <div id="state-not-gtbuy" class="state active">
+    <div class="empty-icon">🌐</div>
+    <p class="empty-text">Diese Extension funktioniert nur auf <strong>gtbuy.com</strong>.</p>
     <a class="btn-link" href="https://gtbuy.com/user/warehouse" target="_blank" rel="noopener">
       GTBuy Warehouse öffnen →
     </a>
+    <p class="debug-url" id="debug-url-not-gtbuy"></p>
+  </div>
+
+  <!-- ── State: no-warehouse (auf GTBuy, aber nicht im Warehouse) ───────── -->
+  <div id="state-no-warehouse" class="state">
+    <div class="empty-icon">📦</div>
+    <p class="empty-text">Bitte öffne die <strong>Warehouse</strong>-Seite auf GTBuy.</p>
+    <a class="btn-link" href="https://gtbuy.com/user/warehouse" target="_blank" rel="noopener">
+      Warehouse öffnen →
+    </a>
+    <p class="debug-url" id="debug-url-no-warehouse"></p>
+  </div>
+
+  <!-- ── State: no-items (Warehouse erkannt, aber Scraper findet nichts) ── -->
+  <div id="state-no-items" class="state">
+    <div class="empty-icon">⚠️</div>
+    <p class="empty-text">Warehouse erkannt, aber <strong>keine Items</strong> gefunden.</p>
+    <p class="empty-text" style="font-size:11px;margin-top:4px">
+      Prüfe ob Items im Warehouse vorhanden sind und die Seite vollständig geladen ist.
+    </p>
+    <button id="retry-items-btn" class="btn-primary" style="margin-top:10px">↻ Erneut scannen</button>
+    <p class="debug-url" id="debug-url-no-items"></p>
   </div>
 
   <!-- ── State: ready ────────────────────────────────────────────────────── -->
@@ -72,11 +94,12 @@
     <button id="retry-btn" class="btn-primary">Erneut versuchen</button>
   </div>
 
+  <script src="popup.js"></script>
+
   <!-- ── Footer ──────────────────────────────────────────────────────────── -->
   <footer class="popup-footer">
     Powered by <a href="https://reflow.com" target="_blank" rel="noopener">ReFlow</a>
   </footer>
 
-  <script src="popup.js"></script>
 </body>
 </html>

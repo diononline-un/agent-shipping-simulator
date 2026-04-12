@@ -7,7 +7,7 @@
 
 // ── State machine ─────────────────────────────────────────────────────────────
 
-const STATES = ["no-warehouse", "ready", "running", "results", "error"];
+const STATES = ["not-gtbuy", "no-warehouse", "no-items", "ready", "running", "results", "error"];
 
 function showState(name) {
   STATES.forEach((s) => {
@@ -33,6 +33,7 @@ const savingsBadge        = document.getElementById("savings-badge");
 const newOptimizationBtn  = document.getElementById("new-optimization-btn");
 const errorMessage        = document.getElementById("error-message");
 const retryBtn            = document.getElementById("retry-btn");
+const retryItemsBtn       = document.getElementById("retry-items-btn");
 
 // ── App state ──────────────────────────────────────────────────────────────────
 
@@ -238,34 +239,47 @@ stopBtn.addEventListener("click", async () => {
 newOptimizationBtn.addEventListener("click", () => showState("ready"));
 
 retryBtn.addEventListener("click", () => showState("ready"));
+retryItemsBtn.addEventListener("click", () => bootstrap());
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 async function bootstrap() {
-  // Check if we're on a supported agent page
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url) {
-    showState("no-warehouse");
-    return;
-  }
+  const url = tab?.url || "";
 
-  const isGTBuy = /gtbuy\.com/i.test(tab.url);
+  // 1. Not on GTBuy at all
+  const isGTBuy = /gtbuy\.com/i.test(url);
   if (!isGTBuy) {
-    showState("no-warehouse");
+    const el = document.getElementById("debug-url-not-gtbuy");
+    if (el) el.textContent = url ? `Erkannte URL: ${url}` : "Keine URL erkannt";
+    showState("not-gtbuy");
     return;
   }
 
-  const isWarehouse = /gtbuy\.com\/user\/warehouse/i.test(tab.url);
+  // 2. On GTBuy but not on warehouse path
+  //    Permissive check: just look for "warehouse" anywhere in the path
+  const isWarehouse = /warehouse/i.test(url);
   if (!isWarehouse) {
+    const el = document.getElementById("debug-url-no-warehouse");
+    if (el) el.textContent = `Erkannte URL: ${url}`;
     showState("no-warehouse");
     return;
   }
 
-  // Request items from the content script
+  // 3. On warehouse — try to fetch items from content script
   const response = await sendToContent({ type: "GET_ITEMS" });
 
-  if (response.error || !response.items || response.items.length === 0) {
-    showState("no-warehouse");
+  if (response.error) {
+    // Content script not reachable → extension not injected (reload page)
+    errorMessage.textContent = `Extension nicht erreichbar. Bitte Seite neu laden. (${response.error})`;
+    showState("error");
+    return;
+  }
+
+  if (!response.items || response.items.length === 0) {
+    const el = document.getElementById("debug-url-no-items");
+    if (el) el.textContent = `URL: ${url}`;
+    showState("no-items");
     return;
   }
 

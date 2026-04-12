@@ -88,6 +88,14 @@ body {
 
 .btn-link:hover { text-decoration: underline; }
 
+.debug-url {
+  margin-top: 10px;
+  font-size: 10px;
+  color: #475569;
+  word-break: break-all;
+  text-align: center;
+}
+
 /* ── Ready state ─────────────────────────────────────────────────────────── */
 
 .section-header {

@@ -5,6 +5,7 @@
   "description": "Optimize your warehouse parcels for minimum shipping costs",
   "permissions": ["activeTab", "storage", "tabs"],
   "host_permissions": [
+    "*://gtbuy.com/*",
     "*://*.gtbuy.com/*"
   ],
   "action": {
@@ -17,7 +18,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.gtbuy.com/*"],
+      "matches": ["*://gtbuy.com/*", "*://*.gtbuy.com/*"],
       "js": [
         "content/agents/gtbuy.js",
         "content/scraper.js",
