@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ReFlow Parcel Optimizer</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header class="popup-header">
+    <span class="logo">⚡ ReFlow</span>
+    <span class="tagline">Parcel Optimizer</span>
+  </header>
+
+  <!-- ── State: no-warehouse ─────────────────────────────────────────────── -->
+  <div id="state-no-warehouse" class="state active">
+    <div class="empty-icon">📦</div>
+    <p class="empty-text">Öffne dein <strong>GTBuy Warehouse</strong> und klicke dann hier.</p>
+    <a class="btn-link" href="https://gtbuy.com/warehouse" target="_blank" rel="noopener">
+      GTBuy Warehouse öffnen →
+    </a>
+  </div>
+
+  <!-- ── State: ready ────────────────────────────────────────────────────── -->
+  <div id="state-ready" class="state">
+    <div class="section-header">
+      <span id="item-count-label">0 Items erkannt</span>
+      <div class="select-controls">
+        <button id="select-all-btn" class="btn-text">Alle</button>
+        <span class="divider">|</span>
+        <button id="select-none-btn" class="btn-text">Keine</button>
+      </div>
+    </div>
+
+    <div id="item-list" class="item-list"></div>
+
+    <div class="weight-summary">
+      Gesamt: <strong id="total-weight-display">0 g</strong>
+    </div>
+
+    <button id="start-optimization-btn" class="btn-primary" disabled>
+      🔍 Optimize Parcels
+    </button>
+  </div>
+
+  <!-- ── State: running ──────────────────────────────────────────────────── -->
+  <div id="state-running" class="state">
+    <div class="progress-label" id="progress-label">Starte Optimierung...</div>
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" id="progress-bar-fill"></div>
+    </div>
+    <div class="progress-sub" id="progress-sub">Kombinationen werden getestet</div>
+    <button id="stop-btn" class="btn-secondary">⏹ Stop</button>
+  </div>
+
+  <!-- ── State: results ──────────────────────────────────────────────────── -->
+  <div id="state-results" class="state">
+    <div class="results-header">
+      <span class="results-title">Optimale Aufteilung</span>
+      <span id="savings-badge" class="savings-badge"></span>
+    </div>
+    <div id="results-list" class="results-list"></div>
+    <button id="new-optimization-btn" class="btn-secondary">↩ Neue Optimierung</button>
+  </div>
+
+  <!-- ── State: error ────────────────────────────────────────────────────── -->
+  <div id="state-error" class="state">
+    <div class="error-icon">⚠️</div>
+    <p id="error-message" class="error-text">Ein Fehler ist aufgetreten.</p>
+    <button id="retry-btn" class="btn-primary">Erneut versuchen</button>
+  </div>
+
+  <!-- ── Footer ──────────────────────────────────────────────────────────── -->
+  <footer class="popup-footer">
+    Powered by <a href="https://reflow.com" target="_blank" rel="noopener">ReFlow</a>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
