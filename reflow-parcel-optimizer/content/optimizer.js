@@ -114,8 +114,12 @@ function allTwoWaySplits(items) {
     }
     return splits;
   }
+  // item[0] is always in group A (eliminates mirror duplicates).
+  // Remaining items[1..n-1]: bit (i-1) = 1 → group A, 0 → group B.
+  // mask=0            → all remaining items in B (valid: gB non-empty)
+  // mask=2^(n-1)-1    → all remaining items in A (invalid: gB empty) — excluded
   const splits = [];
-  for (let mask = 1; mask < (1 << (n - 1)); mask++) {
+  for (let mask = 0; mask < (1 << (n - 1)) - 1; mask++) {
     const gA = [items[0]];
     const gB = [];
     for (let i = 1; i < n; i++) {

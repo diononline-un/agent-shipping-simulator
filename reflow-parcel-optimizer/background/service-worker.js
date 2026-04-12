@@ -159,6 +159,9 @@ async function startTabOptimization(candidates) {
 
   // Open a dedicated minimized window so simulation tabs don't clutter the
   // user's current session.  Falls back gracefully if the API is unavailable.
+  // IMPORTANT: do NOT remove the initial blank tab — Chrome closes a window
+  // the moment it has zero tabs, which would invalidate windowId before any
+  // task tabs are created.  The blank tab is harmless in a minimized window.
   try {
     const simWindow = await chrome.windows.create({
       url:     "about:blank",
@@ -166,9 +169,6 @@ async function startTabOptimization(candidates) {
       focused: false,
     });
     optState.windowId = simWindow.id;
-    // Remove the blank tab that chrome.windows.create opens automatically
-    const [blankTab] = await chrome.tabs.query({ windowId: simWindow.id });
-    if (blankTab) chrome.tabs.remove(blankTab.id).catch(() => {});
   } catch (_) {
     // "windows" permission missing or API unavailable — use current window
     optState.windowId = null;
