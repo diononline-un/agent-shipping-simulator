@@ -41,7 +41,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "OPEN_IN_TAB") {
     chrome.storage.session
       .set({ reflow_split: message.itemGroups })
-      .then(() => chrome.tabs.create({ url: "https://gtbuy.com/warehouse" }))
+      .then(() => chrome.tabs.create({ url: "https://gtbuy.com/user/warehouse" }))
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ error: err.message }));
     return true;

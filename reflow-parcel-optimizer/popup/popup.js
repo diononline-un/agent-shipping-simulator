@@ -255,7 +255,7 @@ async function bootstrap() {
     return;
   }
 
-  const isWarehouse = /gtbuy\.com.*warehouse/i.test(tab.url);
+  const isWarehouse = /gtbuy\.com\/user\/warehouse/i.test(tab.url);
   if (!isWarehouse) {
     showState("no-warehouse");
     return;

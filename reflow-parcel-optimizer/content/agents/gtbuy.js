@@ -12,7 +12,7 @@ const gtbuyConfig = {
   id: "gtbuy",
   name: "GTBuy",
   urlPattern: /gtbuy\.com/,
-  warehouseUrlPattern: /gtbuy\.com.*warehouse/i,
+  warehouseUrlPattern: /gtbuy\.com\/user\/warehouse/i,
 
   selectors: {
     // ── Warehouse page ────────────────────────────────────────────────────────
