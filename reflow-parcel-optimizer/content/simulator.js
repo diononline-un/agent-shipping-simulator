@@ -195,19 +195,74 @@ function findSubmitButton(agentConfig) {
 
 // ── Shipping lines reader ─────────────────────────────────────────────────────
 
+// GTBuy /submit/preview price selector (verified from live DOM inspection)
+const GTBUY_PRICE_SEL = ".col-ff1.f-24.lin-38.bold.ff-bold.mr-4";
+
 /**
- * Returns true when the shipping lines table is present AND has rows.
+ * Returns true when the shipping lines table/list is present AND has rows.
+ * Supports both GTBuy's div-based /submit/preview layout and classic table layout.
  */
 function shippingLinesPresent(agentConfig) {
+  // GTBuy /submit/preview: prices are rendered as divs, not <table> rows
+  if (document.querySelectorAll(GTBUY_PRICE_SEL).length > 0) return true;
+  // Fallback: original table/selector-based layout
   return document.querySelectorAll(agentConfig.selectors.shippingLineRows).length > 0;
 }
 
 /**
  * Reads all shipping lines from the current page.
+ * Supports GTBuy /submit/preview (div-based) and classic table layouts.
  * @param {Object} agentConfig
  * @returns {import('./types').ShippingLine[]}
  */
 function readShippingLines(agentConfig) {
+  // ── GTBuy /submit/preview ─────────────────────────────────────────────────
+  // Prices live in:  div.col-ff1.f-24.lin-38.bold.ff-bold.mr-4  → "$58.46"
+  // Each such div is scoped to a Vue component (data-v-XXXX attribute).
+  // Walking up while the parent shares the same scoped attr reaches the row root.
+  const gtbuyPriceEls = document.querySelectorAll(GTBUY_PRICE_SEL);
+  if (gtbuyPriceEls.length > 0) {
+    const lines = [];
+
+    gtbuyPriceEls.forEach((priceEl) => {
+      const price = parseFloat(priceEl.textContent.replace(/[^0-9.]/g, "")) || 0;
+      if (!price) return;
+
+      // Find the Vue component root: walk up while parent shares the scoped attr
+      let row = priceEl;
+      const scopeAttr = priceEl.getAttributeNames().find((a) => a.startsWith("data-v-"));
+      if (scopeAttr) {
+        while (row.parentElement?.hasAttribute(scopeAttr)) {
+          row = row.parentElement;
+        }
+      } else {
+        // Fallback: walk up until an element with ≥ 3 children is found
+        row = priceEl.parentElement;
+        for (let i = 0; i < 6 && row; i++) {
+          if (row.children.length >= 3) break;
+          row = row.parentElement;
+        }
+      }
+
+      // Name: first substantive text in the row that is not numeric / USD / $
+      const allTexts = Array.from(row.querySelectorAll("*"))
+        .filter((el) => !el.children.length)
+        .map((el) => el.textContent.trim())
+        .filter((t) => t.length > 2 && !/^[\$\d.,\s]+$/.test(t) && !/^USD/i.test(t));
+      const name = allTexts[0] || "Unknown";
+
+      // Days: look for "N-N" pattern (e.g. "9-16", "8–12")
+      const rowText = row.textContent || "";
+      const daysMatch = rowText.match(/\b(\d{1,2})\s*[-–~]\s*(\d{1,2})\b/);
+      const days = daysMatch ? daysMatch[0].trim() : "N/A";
+
+      lines.push({ name, price, currency: "USD", estimatedDays: days, features: [] });
+    });
+
+    if (lines.length > 0) return lines;
+  }
+
+  // ── Classic table / selector-based layout (fallback) ─────────────────────
   const { selectors, parsers } = agentConfig;
   const rows  = document.querySelectorAll(selectors.shippingLineRows);
   const lines = [];
