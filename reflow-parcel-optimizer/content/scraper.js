@@ -48,6 +48,27 @@ function findItemContainer(el, maxLevels = 8) {
   return null;
 }
 
+/**
+ * Walk up from `container` to find the GTBuy order card header that contains
+ * "Order No: IGT..." and extract the order ID.
+ * Returns "" if not found.
+ *
+ * @param {Element} container
+ * @param {number}  maxLevels
+ * @returns {string}
+ */
+function findOrderIdNear(container, maxLevels = 8) {
+  let node = container.parentElement;
+  for (let i = 0; i < maxLevels; i++) {
+    if (!node || node === document.body) break;
+    const text = allText(node);
+    const m    = text.match(/Order\s+No\s*[：:]\s*([A-Za-z0-9]{6,})/i);
+    if (m) return m[1];
+    node = node.parentElement;
+  }
+  return "";
+}
+
 // ── Pass 1: CSS-selector based ────────────────────────────────────────────────
 
 function scrapeWithSelectors(agentConfig) {
@@ -78,6 +99,7 @@ function scrapeWithSelectors(agentConfig) {
       dimensions,
       quantity:    1,
       category:    categoryText || "Unknown",
+      orderId:     findOrderIdNear(container),
       checkboxRef: checkbox,
     });
     index++;
@@ -153,6 +175,7 @@ function scrapeByContent(agentConfig) {
         dimensions,
         quantity:    1,
         category:    "Unknown",
+        orderId:     findOrderIdNear(container),
         checkboxRef: checkbox,
       });
       index++;

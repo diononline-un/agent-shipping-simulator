@@ -390,20 +390,30 @@ function jaccardSimilarity(a, b) {
 }
 
 /**
- * Find the best-matching order for a warehouse item (by name similarity).
+ * Find the matching order entry for a warehouse item.
+ * Primary: exact orderId match (warehouse scraper now extracts Order No from card header).
+ * Fallback: Jaccard word-similarity on product name (for items without orderId).
+ *
  * @param {object}   warehouseItem
- * @param {object[]} orders
+ * @param {Map}      ordersByIdMap   orderId → order object
+ * @param {object[]} ordersArray     all orders (for fallback name search)
  * @returns {object|null}
  */
-function findOrderMatch(warehouseItem, orders) {
-  if (!orders || orders.length === 0) return null;
+function findOrderMatch(warehouseItem, ordersByIdMap, ordersArray) {
+  // 1. Exact orderId match
+  if (warehouseItem.orderId && ordersByIdMap.has(warehouseItem.orderId)) {
+    return ordersByIdMap.get(warehouseItem.orderId);
+  }
+
+  // 2. Fuzzy name match (fallback for older cached items without orderId)
+  if (!ordersArray || ordersArray.length === 0) return null;
   const wWords = normalizeForMatch(warehouseItem.name);
   let best = null;
   let bestScore = 0;
 
-  for (const order of orders) {
+  for (const order of ordersArray) {
     const score = jaccardSimilarity(wWords, normalizeForMatch(order.name));
-    if (score > bestScore && score >= 0.25) {
+    if (score > bestScore && score >= 0.3) {
       bestScore = score;
       best = order;
     }
@@ -426,7 +436,7 @@ function csvEscape(value) {
 
 /**
  * Build a CSV string from warehouse items + matched order data.
- * @param {object[]} items   Serialized warehouse items
+ * @param {object[]} items   Serialized warehouse items (include orderId from scraper)
  * @param {object[]} orders  Stored order items from chrome.storage.local
  * @returns {string}
  */
@@ -439,27 +449,33 @@ function buildCSV(items, orders) {
     "Height_cm",
     "Quantity",
     "Category",
-    "PurchasePrice_CNY",
-    "ProductURL",
     "OrderID",
+    "Description",
+    "UnitPrice_USD",
+    "TotalPrice_USD",
     "ExportDate",
   ];
 
   const today = new Date().toISOString().slice(0, 10);
 
+  // Build orderId lookup map for O(1) exact matches
+  const ordersByIdMap = new Map();
+  (orders || []).forEach((o) => { if (o.orderId) ordersByIdMap.set(o.orderId, o); });
+
   const rows = items.map((item) => {
-    const match = findOrderMatch(item, orders);
+    const match = findOrderMatch(item, ordersByIdMap, orders);
     return [
-      csvEscape(item.name    || ""),
-      item.weight            || "",
-      item.dimensions?.length || "",
-      item.dimensions?.width  || "",
-      item.dimensions?.height || "",
-      item.quantity          || 1,
-      csvEscape(item.category || ""),
-      match ? (match.price   || "") : "",
-      match ? csvEscape(match.url || "") : "",
-      match ? csvEscape(match.orderId || "") : "",
+      csvEscape(item.name          || ""),
+      item.weight                  || "",
+      item.dimensions?.length      || "",
+      item.dimensions?.width       || "",
+      item.dimensions?.height      || "",
+      item.quantity                || 1,
+      csvEscape(item.category      || ""),
+      csvEscape(item.orderId       || (match ? match.orderId : "") || ""),
+      match ? csvEscape(match.description || "") : "",
+      match ? (match.unitPrice  || "") : "",
+      match ? (match.totalPrice || "") : "",
       today,
     ];
   });

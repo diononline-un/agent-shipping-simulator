@@ -403,8 +403,8 @@ function showOverlay(result) {
 // ── Serialization ─────────────────────────────────────────────────────────────
 
 function serializeItems(items) {
-  return items.map(({ id, name, weight, dimensions, quantity, category }) => ({
-    id, name, weight, dimensions, quantity, category,
+  return items.map(({ id, name, weight, dimensions, quantity, category, orderId }) => ({
+    id, name, weight, dimensions, quantity, category, orderId: orderId || "",
   }));
 }
 
