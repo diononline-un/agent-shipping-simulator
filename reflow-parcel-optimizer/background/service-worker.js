@@ -22,14 +22,8 @@ async function forwardToContentScript(message) {
   return chrome.tabs.sendMessage(tab.id, message);
 }
 
-// Forward Content Script → Popup broadcast messages (no sendResponse needed)
-chrome.runtime.onMessage.addListener((message, sender) => {
-  const broadcastTypes = ["OPTIMIZATION_PROGRESS", "SIMULATION_LOG", "ITEMS_DETECTED"];
-  if (broadcastTypes.includes(message.type) && sender.tab) {
-    // Relay to all extension pages (popup)
-    chrome.runtime.sendMessage(message).catch(() => {}); // popup may be closed
-  }
-});
+// NOTE: Content scripts reach the popup directly via chrome.runtime.sendMessage —
+// no relay needed. Adding one would cause duplicate messages in the popup.
 
 // Listen for Popup → Background requests that need tab context
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
