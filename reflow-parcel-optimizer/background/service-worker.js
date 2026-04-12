@@ -154,7 +154,25 @@ async function startTabOptimization(candidates) {
     done:      0,
     openCount: 0,
     queue:     candidates.map((c) => ({ ...c })),
+    windowId:  null, // dedicated simulation window, set below
   };
+
+  // Open a dedicated minimized window so simulation tabs don't clutter the
+  // user's current session.  Falls back gracefully if the API is unavailable.
+  try {
+    const simWindow = await chrome.windows.create({
+      url:     "about:blank",
+      state:   "minimized",
+      focused: false,
+    });
+    optState.windowId = simWindow.id;
+    // Remove the blank tab that chrome.windows.create opens automatically
+    const [blankTab] = await chrome.tabs.query({ windowId: simWindow.id });
+    if (blankTab) chrome.tabs.remove(blankTab.id).catch(() => {});
+  } catch (_) {
+    // "windows" permission missing or API unavailable — use current window
+    optState.windowId = null;
+  }
 
   await openNextBatch();
 }
@@ -167,7 +185,9 @@ async function openNextBatch() {
     optState.openCount++;
 
     try {
-      const tab = await chrome.tabs.create({ url: GTBUY_WAREHOUSE_URL, active: false });
+      const tabOptions = { url: GTBUY_WAREHOUSE_URL, active: false };
+      if (optState.windowId) tabOptions.windowId = optState.windowId;
+      const tab = await chrome.tabs.create(tabOptions);
       optState.tasks.set(tab.id, {
         candidateIndex: candidate.candidateIndex,
         label:          candidate.label,
@@ -244,8 +264,12 @@ function recordResult(message, tabId, skipped) {
 function finishOptimization() {
   if (!optState) return;
 
-  const results = [...optState.results];
+  const results  = [...optState.results];
+  const windowId = optState.windowId;
   optState = null;
+
+  // Close the dedicated simulation window now that all tabs are done
+  if (windowId) chrome.windows.remove(windowId).catch(() => {});
 
   const valid = results.filter((r) => !r.skipped && r.totalPrice > 0);
   valid.sort((a, b) => a.totalPrice - b.totalPrice);
@@ -264,8 +288,10 @@ function finishOptimization() {
 
 function cancelOptimization() {
   if (!optState) return;
+  const windowId = optState.windowId;
   for (const [tabId] of optState.tasks) {
     chrome.tabs.remove(tabId).catch(() => {});
   }
   optState = null;
+  if (windowId) chrome.windows.remove(windowId).catch(() => {});
 }

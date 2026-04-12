@@ -3,7 +3,7 @@
   "name": "ReFlow Parcel Optimizer",
   "version": "0.1.0",
   "description": "Optimize your warehouse parcels for minimum shipping costs",
-  "permissions": ["activeTab", "storage", "tabs"],
+  "permissions": ["activeTab", "storage", "tabs", "windows"],
   "host_permissions": [
     "*://gtbuy.com/*",
     "*://*.gtbuy.com/*"

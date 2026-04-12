@@ -34,6 +34,8 @@ const newOptimizationBtn  = document.getElementById("new-optimization-btn");
 const errorMessage        = document.getElementById("error-message");
 const retryBtn            = document.getElementById("retry-btn");
 const retryItemsBtn       = document.getElementById("retry-items-btn");
+const maxPackagesSelect   = document.getElementById("max-packages-select");
+const durationEstimate    = document.getElementById("duration-estimate");
 
 // ── App state ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +58,46 @@ function sendToContent(message) {
 
 function formatWeight(grams) {
   return grams >= 1000 ? `${(grams / 1000).toFixed(2)} kg` : `${grams} g`;
+}
+
+// ── Duration estimate (mirrors optimizer.js logic — no content script needed) ─
+
+/**
+ * Approximate candidate count for the given item count and maxPackages.
+ * Mirrors the slot-budget logic in optimizer.js generateCandidates.
+ */
+function estimateCandidateCount(n, maxPackages) {
+  if (n === 0) return 0;
+  if (n === 1) return 1;
+  const budget = 99; // MAX_CANDIDATES - 1
+  let k2Budget, k3Budget, k4Budget;
+  if (maxPackages === 2) {
+    k2Budget = budget; k3Budget = 0; k4Budget = 0;
+  } else if (maxPackages === 3) {
+    k2Budget = Math.floor(budget * 0.55); k3Budget = budget - k2Budget; k4Budget = 0;
+  } else {
+    k2Budget = Math.floor(budget * 0.42); k3Budget = Math.floor(budget * 0.35); k4Budget = budget - k2Budget - k3Budget;
+  }
+  const k2Actual = n <= 18 ? Math.pow(2, n - 1) - 1 : 3000;
+  const k2Count  = Math.min(k2Budget, k2Actual);
+  const k3Count  = maxPackages >= 3 && n >= 3 ? k3Budget : 0;
+  const k4Count  = maxPackages >= 4 && n >= 4 ? k4Budget : 0;
+  return 1 + k2Count + k3Count + k4Count;
+}
+
+function formatDuration(candidateCount) {
+  const secs = candidateCount * 12; // SECONDS_PER_CANDIDATE
+  if (secs < 90) return `~${Math.ceil(secs / 10) * 10} Sek.`;
+  return `~${Math.ceil(secs / 60)} Min.`;
+}
+
+function updateDurationEstimate() {
+  const n = selectedIds.size;
+  const maxPkg = parseInt(maxPackagesSelect.value) || 2;
+  const count  = estimateCandidateCount(n, maxPkg);
+  durationEstimate.textContent = n > 0
+    ? `${count} Kandidaten · ${formatDuration(count)}`
+    : "";
 }
 
 // ── Item list rendering ───────────────────────────────────────────────────────
@@ -110,6 +152,7 @@ function updateWeightSummary() {
     .filter((i) => selectedIds.has(i.id))
     .reduce((sum, i) => sum + i.weight, 0);
   totalWeightDisplay.textContent = formatWeight(total);
+  updateDurationEstimate();
 }
 
 // ── Debug panel ───────────────────────────────────────────────────────────────
@@ -268,15 +311,22 @@ selectNoneBtn.addEventListener("click", () => {
   startBtn.disabled = true;
 });
 
+maxPackagesSelect.addEventListener("change", () => {
+  updateDurationEstimate();
+});
+
 startBtn.addEventListener("click", async () => {
+  const maxPackages = parseInt(maxPackagesSelect.value) || 2;
+
   showState("running");
   progressBarFill.style.width = "0%";
   progressLabel.textContent = "Starte Optimierung...";
   progressSub.textContent = "Kombinationen werden berechnet";
 
   const response = await sendToContent({
-    type: "START_OPTIMIZATION",
+    type:            "START_OPTIMIZATION",
     selectedItemIds: Array.from(selectedIds),
+    maxPackages,
   });
 
   if (response.error) {
@@ -320,7 +370,6 @@ async function bootstrap() {
   }
 
   // 2. On GTBuy but not on warehouse path
-  //    Permissive check: just look for "warehouse" anywhere in the path
   const isWarehouse = /warehouse/i.test(url);
   if (!isWarehouse) {
     const el = document.getElementById("debug-url-no-warehouse");
@@ -333,7 +382,6 @@ async function bootstrap() {
   const response = await sendToContent({ type: "GET_ITEMS" });
 
   if (response.error) {
-    // Content script not reachable → extension not injected (reload page)
     errorMessage.textContent = `Extension nicht erreichbar. Bitte Seite neu laden. (${response.error})`;
     showState("error");
     return;
@@ -346,12 +394,12 @@ async function bootstrap() {
     return;
   }
 
-  allItems = response.items;
+  allItems   = response.items;
   selectedIds = new Set(allItems.map((i) => i.id));
 
   itemCountLabel.textContent = `${allItems.length} Item${allItems.length !== 1 ? "s" : ""} erkannt`;
   renderItemList();
-  updateWeightSummary();
+  updateWeightSummary(); // also calls updateDurationEstimate
   startBtn.disabled = false;
   showState("ready");
 }

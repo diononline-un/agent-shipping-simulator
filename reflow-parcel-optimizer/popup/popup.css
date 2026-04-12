@@ -179,6 +179,45 @@ body {
   margin-bottom: 12px;
 }
 
+/* ── Optimization settings row ───────────────────────────────────────────── */
+
+.opt-settings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.opt-settings-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.opt-packages-select {
+  background: var(--color-bg-input);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+
+.opt-packages-select:focus { border-color: var(--color-primary); }
+
+.opt-duration {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 
 .btn-primary,
