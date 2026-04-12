@@ -478,6 +478,42 @@ body {
 .debug-lvl-error { color: #fc8181; flex-shrink: 0; width: 36px; }
 .debug-msg       { color: #e2e8f0; word-break: break-word; }
 
+/* ── Export section ──────────────────────────────────────────────────────── */
+
+.export-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.btn-export {
+  width: 100%;
+  padding: 7px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  transition: background 0.15s;
+  margin-bottom: 5px;
+}
+
+.btn-export:hover:not(:disabled) { background: var(--color-bg-input); }
+.btn-export:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.export-hint {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-align: center;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.export-hint.has-data { color: var(--color-success); }
+.export-hint.no-data  { color: #64748b; }
+
 /* ── Footer ──────────────────────────────────────────────────────────────── */
 
 .popup-footer {

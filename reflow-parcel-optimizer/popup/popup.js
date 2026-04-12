@@ -36,6 +36,8 @@ const retryBtn            = document.getElementById("retry-btn");
 const retryItemsBtn       = document.getElementById("retry-items-btn");
 const maxPackagesSelect   = document.getElementById("max-packages-select");
 const durationEstimate    = document.getElementById("duration-estimate");
+const exportCsvBtn        = document.getElementById("export-csv-btn");
+const exportOrdersHint    = document.getElementById("export-orders-hint");
 
 // ── App state ──────────────────────────────────────────────────────────────────
 
@@ -355,6 +357,182 @@ newOptimizationBtn.addEventListener("click", () => showState("ready"));
 retryBtn.addEventListener("click", () => showState("ready"));
 retryItemsBtn.addEventListener("click", () => bootstrap());
 
+// ── CSV Export ────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a product name for fuzzy matching.
+ * Returns an array of lowercase words ≥ 3 characters.
+ * @param {string} str
+ * @returns {string[]}
+ */
+function normalizeForMatch(str) {
+  return (str || "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length >= 3);
+}
+
+/**
+ * Jaccard similarity between two word arrays.
+ * @param {string[]} a
+ * @param {string[]} b
+ * @returns {number} 0–1
+ */
+function jaccardSimilarity(a, b) {
+  if (!a.length || !b.length) return 0;
+  const setA = new Set(a);
+  const setB = new Set(b);
+  const intersection = [...setA].filter((w) => setB.has(w)).length;
+  const union        = new Set([...setA, ...setB]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Find the best-matching order for a warehouse item (by name similarity).
+ * @param {object}   warehouseItem
+ * @param {object[]} orders
+ * @returns {object|null}
+ */
+function findOrderMatch(warehouseItem, orders) {
+  if (!orders || orders.length === 0) return null;
+  const wWords = normalizeForMatch(warehouseItem.name);
+  let best = null;
+  let bestScore = 0;
+
+  for (const order of orders) {
+    const score = jaccardSimilarity(wWords, normalizeForMatch(order.name));
+    if (score > bestScore && score >= 0.25) {
+      bestScore = score;
+      best = order;
+    }
+  }
+  return best;
+}
+
+/**
+ * Escape a value for CSV output.
+ * @param {string|number} value
+ * @returns {string}
+ */
+function csvEscape(value) {
+  const str = String(value == null ? "" : value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+/**
+ * Build a CSV string from warehouse items + matched order data.
+ * @param {object[]} items   Serialized warehouse items
+ * @param {object[]} orders  Stored order items from chrome.storage.local
+ * @returns {string}
+ */
+function buildCSV(items, orders) {
+  const headers = [
+    "Name",
+    "Weight_g",
+    "Length_cm",
+    "Width_cm",
+    "Height_cm",
+    "Quantity",
+    "Category",
+    "PurchasePrice_CNY",
+    "ProductURL",
+    "OrderID",
+    "ExportDate",
+  ];
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const rows = items.map((item) => {
+    const match = findOrderMatch(item, orders);
+    return [
+      csvEscape(item.name    || ""),
+      item.weight            || "",
+      item.dimensions?.length || "",
+      item.dimensions?.width  || "",
+      item.dimensions?.height || "",
+      item.quantity          || 1,
+      csvEscape(item.category || ""),
+      match ? (match.price   || "") : "",
+      match ? csvEscape(match.url || "") : "",
+      match ? csvEscape(match.orderId || "") : "",
+      today,
+    ];
+  });
+
+  return [headers, ...rows]
+    .map((row) => row.join(","))
+    .join("\n");
+}
+
+/**
+ * Trigger a CSV file download in the popup context.
+ * Uses a Blob + anchor click — no extra permissions needed.
+ * @param {string} csvString
+ * @param {string} filename
+ */
+function downloadCSV(csvString, filename) {
+  const bom  = "\uFEFF"; // UTF-8 BOM so Excel opens it correctly
+  const blob = new Blob([bom + csvString], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+/**
+ * Update the export hint label below the export button.
+ * Shows whether cached order data is available.
+ */
+async function updateExportHint() {
+  const stored = await new Promise((resolve) => {
+    chrome.storage.local.get(["reflow_orders", "reflow_orders_ts"], resolve);
+  });
+
+  const orders = stored.reflow_orders || [];
+  if (orders.length > 0) {
+    const when = stored.reflow_orders_ts
+      ? new Date(stored.reflow_orders_ts).toLocaleDateString("de-DE")
+      : "?";
+    exportOrdersHint.textContent = `✓ ${orders.length} Bestellungen gecacht (${when}) — Preise werden verknüpft`;
+    exportOrdersHint.className   = "export-hint has-data";
+  } else {
+    exportOrdersHint.textContent = "Tipp: gtbuy.com/user/order öffnen um Preisdaten einzuschließen";
+    exportOrdersHint.className   = "export-hint no-data";
+  }
+}
+
+exportCsvBtn.addEventListener("click", async () => {
+  exportCsvBtn.disabled     = true;
+  exportCsvBtn.textContent  = "Wird erstellt...";
+
+  try {
+    const stored = await new Promise((resolve) => {
+      chrome.storage.local.get(["reflow_orders"], resolve);
+    });
+    const orders = stored.reflow_orders || [];
+
+    const csv      = buildCSV(allItems, orders);
+    const date     = new Date().toISOString().slice(0, 10);
+    const filename = `reflow-warehouse-${date}.csv`;
+
+    downloadCSV(csv, filename);
+  } catch (err) {
+    console.error("[ReFlow] CSV export failed:", err);
+  } finally {
+    exportCsvBtn.disabled    = false;
+    exportCsvBtn.textContent = "📥 Als CSV exportieren";
+  }
+});
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 async function bootstrap() {
@@ -402,6 +580,7 @@ async function bootstrap() {
   renderItemList();
   updateWeightSummary(); // also calls updateDurationEstimate
   startBtn.disabled = false;
+  updateExportHint(); // show cached orders status
   showState("ready");
 }
 

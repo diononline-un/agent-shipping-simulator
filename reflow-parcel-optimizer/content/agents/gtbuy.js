@@ -11,8 +11,9 @@
 const gtbuyConfig = {
   id: "gtbuy",
   name: "GTBuy",
-  urlPattern: /gtbuy\.com/,
+  urlPattern:         /gtbuy\.com/,
   warehouseUrlPattern: /gtbuy\.com.*warehouse/i,
+  ordersUrlPattern:    /gtbuy\.com.*\border\b/i,
 
   selectors: {
     // ── Warehouse page ────────────────────────────────────────────────────────
@@ -51,6 +52,15 @@ const gtbuyConfig = {
 
     // ── Safety blacklist ──────────────────────────────────────────────────────
     FORBIDDEN_BUTTON_TEXTS: ["Submit Parcel", "Confirm Order", "Place Order", "Pay Now"],
+
+    // ── Orders page (gtbuy.com/user/order) ───────────────────────────────────
+    // Each order card contains one or more goods items.
+    // These selectors are heuristic; the content-based fallback handles unknowns.
+    ordersItemContainer: ".goods-item, .order-goods-item, .goods-info, .product-item",
+    ordersProductLink:   "a.goods-name, a.product-name, .item-title a, .goods-title a",
+    ordersPrice:         ".goods-price .price, .price-tag, .amount, .goods-amount",
+    ordersQuantity:      ".goods-num, .quantity, .num, .qty",
+    ordersId:            ".order-no, .order-number, .orderNo, .order-sn",
   },
 
   parsers: {
@@ -99,6 +109,15 @@ const gtbuyConfig = {
    */
   isWarehousePage(url) {
     return this.warehouseUrlPattern.test(url);
+  },
+
+  /**
+   * Detects whether the current page is the GTBuy orders listing.
+   * @param {string} url
+   * @returns {boolean}
+   */
+  isOrdersPage(url) {
+    return this.ordersUrlPattern.test(url);
   },
 };
 

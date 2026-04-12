@@ -17,7 +17,8 @@
  *    - Background closes the tab when done
  */
 
-/* globals gtbuyConfig, scrapeItems, simulateCandidate, generateCandidates,
+/* globals gtbuyConfig, scrapeItems, scrapeOrders, storeOrders,
+           simulateCandidate, generateCandidates,
            waitFor, warehousePresent, WAREHOUSE_RELOAD_TIMEOUT_MS */
 
 // ── Agent detection ───────────────────────────────────────────────────────────
@@ -63,15 +64,20 @@ function init() {
     refreshItems();
     // Check if this tab was opened by "In Tab öffnen" and has a group to pre-select
     checkForSplitTask();
+  } else if (activeAgent.isOrdersPage(window.location.href)) {
+    // Auto-scrape orders page so export can include price + URL data
+    refreshOrders();
   }
 
-  // Re-scrape when SPA navigates back to warehouse
+  // Re-scrape when SPA navigates
   let lastUrl = window.location.href;
   const observer = new MutationObserver(() => {
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href;
       if (!isTaskTab && activeAgent.isWarehousePage(lastUrl)) {
         setTimeout(refreshItems, 800);
+      } else if (activeAgent.isOrdersPage(lastUrl)) {
+        setTimeout(refreshOrders, 800);
       }
     }
   });
@@ -83,6 +89,15 @@ function refreshItems() {
   cachedItems = items;
   if (error) console.warn(error);
   chrome.runtime.sendMessage({ type: "ITEMS_DETECTED", count: items.length });
+}
+
+function refreshOrders() {
+  const { orders, count, error } = scrapeOrders(activeAgent);
+  if (error) console.warn(error);
+  if (count > 0) {
+    storeOrders(orders, window.location.href);
+    chrome.runtime.sendMessage({ type: "ORDERS_DETECTED", count }).catch(() => {});
+  }
 }
 
 // ── Split task mode (tabs opened via "In Tab öffnen") ────────────────────────
