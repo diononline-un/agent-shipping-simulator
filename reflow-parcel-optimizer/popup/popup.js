@@ -112,7 +112,52 @@ function updateWeightSummary() {
   totalWeightDisplay.textContent = formatWeight(total);
 }
 
-// ── Progress updates (from content script via background) ─────────────────────
+// ── Debug panel ───────────────────────────────────────────────────────────────
+
+const debugPanel    = document.getElementById("debug-panel");
+const debugLog      = document.getElementById("debug-log");
+const debugToggle   = document.getElementById("debug-toggle-btn");
+const debugClearBtn = document.getElementById("debug-clear-btn");
+const debugCopyBtn  = document.getElementById("debug-copy-btn");
+let   debugVisible  = false;
+const logLines      = []; // kept for copy-to-clipboard
+
+function appendLog(level, message, ts) {
+  const lvlClass = `debug-lvl-${level}`;
+  const entry    = document.createElement("div");
+  entry.className = "debug-entry";
+  entry.innerHTML =
+    `<span class="debug-ts">${ts}</span>` +
+    `<span class="${lvlClass}">[${level.toUpperCase().slice(0,4)}]</span>` +
+    `<span class="debug-msg">${escapeHtml(message)}</span>`;
+  debugLog.appendChild(entry);
+  debugLog.scrollTop = debugLog.scrollHeight;
+  logLines.push(`${ts} [${level.toUpperCase()}] ${message}`);
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+debugToggle.addEventListener("click", (e) => {
+  e.preventDefault();
+  debugVisible = !debugVisible;
+  debugPanel.style.display = debugVisible ? "block" : "none";
+  debugToggle.textContent = debugVisible ? "🐛 Debug ▲" : "🐛 Debug";
+});
+
+debugClearBtn.addEventListener("click", () => {
+  debugLog.innerHTML = "";
+  logLines.length = 0;
+});
+
+debugCopyBtn.addEventListener("click", () => {
+  navigator.clipboard.writeText(logLines.join("\n")).catch(() => {});
+  debugCopyBtn.textContent = "Kopiert ✓";
+  setTimeout(() => { debugCopyBtn.textContent = "Kopieren"; }, 2000);
+});
+
+// ── Progress + Log updates (from content script via background) ───────────────
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "OPTIMIZATION_PROGRESS") {
@@ -125,6 +170,16 @@ chrome.runtime.onMessage.addListener((message) => {
     progressSub.textContent = currentBest
       ? `Aktuell bestes Ergebnis: $${currentBest.toFixed(2)}`
       : "Kombinationen werden getestet";
+  }
+
+  if (message.type === "SIMULATION_LOG") {
+    appendLog(message.level, message.message, message.ts);
+    // Auto-open debug panel on errors so user sees problems immediately
+    if (message.level === "error" && !debugVisible) {
+      debugVisible = true;
+      debugPanel.style.display = "block";
+      debugToggle.textContent = "🐛 Debug ▲";
+    }
   }
 });
 

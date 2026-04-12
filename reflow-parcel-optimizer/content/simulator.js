@@ -251,11 +251,13 @@ async function selectItems(items) {
  * Simulates one parcel candidate.
  *
  * @param {import('./types').ParcelCandidate} candidate
- * @param {Object} agentConfig
+ * @param {Object}   agentConfig
  * @param {{ cancelled: boolean }} cancelToken
+ * @param {Function} [onLog] - (level: 'info'|'warn'|'error', message: string) => void
  * @returns {Promise<import('./types').SimulationResult>}
  */
-async function simulateCandidate(candidate, agentConfig, cancelToken) {
+async function simulateCandidate(candidate, agentConfig, cancelToken, onLog) {
+  const log  = onLog || (() => {});
   const groupResults = [];
 
   for (const items of candidate.itemGroups) {
@@ -265,62 +267,82 @@ async function simulateCandidate(candidate, agentConfig, cancelToken) {
 
     try {
       // 1. Deselect everything
+      log("info", `   Deselektiere alle Checkboxen...`);
       await deselectAll(agentConfig);
 
       // 2. Select this group's items
+      log("info", `   Selektiere ${items.length} Item(s): ${items.map(i => i.name.slice(0,20)).join(", ")}`);
       await selectItems(items);
 
       // Verify at least one checkbox is now checked before proceeding
-      const checkedCount = items.filter(
-        (i) => i.checkboxRef && i.checkboxRef.checked
-      ).length;
+      const checkedCount = items.filter(i => i.checkboxRef && i.checkboxRef.checked).length;
+      log(checkedCount > 0 ? "info" : "error",
+        `   Checkbox-Check: ${checkedCount}/${items.length} als checked erkannt`);
 
       if (checkedCount === 0) {
-        throw new Error(
-          `[ReFlow] None of the ${items.length} checkboxes registered as checked. ` +
-          "Vue reactivity might require a different interaction method."
-        );
+        throw new Error(`0/${items.length} Checkboxen registriert. Vue reactivity Problem.`);
       }
 
       // 3. Find and click the submit button
       const submitBtn = findSubmitButton(agentConfig);
-      if (!submitBtn) throw new Error("[ReFlow] Submit button not found");
+      log(submitBtn ? "info" : "error",
+        `   Submit-Button: ${submitBtn ? `gefunden (text: "${submitBtn.textContent.trim().slice(0,30)}")` : "NICHT gefunden"}`);
+      if (!submitBtn) throw new Error("Submit-Button nicht gefunden");
       assertNotForbidden(submitBtn, agentConfig.selectors.FORBIDDEN_BUTTON_TEXTS);
       safeClick(submitBtn);
+      log("info", `   Submit-Button geklickt, warte auf Seite...`);
 
       // 4. Short wait, then check for "select items" error dialog
       await sleep(800);
       if (isSelectItemsErrorVisible()) {
+        log("error", `   GTBuy-Dialog: "Select items for pickup" erschienen — Checkbox-Selektion nicht erkannt`);
         dismissAnyDialog();
         await sleep(500);
-        throw new Error("[ReFlow] GTBuy: 'Select items for pickup' — checkboxes not registering");
+        throw new Error(`GTBuy zeigt "Select items for pickup"`);
       }
 
       // 5. Wait for shipping lines
+      log("info", `   Warte auf Shipping-Lines (Selector: "${agentConfig.selectors.shippingLineRows}")...`);
       await waitFor(
         () => shippingLinesPresent(agentConfig),
         SHIPPING_PAGE_TIMEOUT_MS,
         "shipping line table"
       );
+      const rowCount = document.querySelectorAll(agentConfig.selectors.shippingLineRows).length;
+      log("info", `   Shipping-Lines geladen: ${rowCount} Zeile(n) gefunden`);
 
       // 6. Read shipping lines
       const allLines = readShippingLines(agentConfig);
-      if (allLines.length === 0) throw new Error("[ReFlow] No shipping lines found");
+      log(allLines.length > 0 ? "info" : "error",
+        `   Shipping Lines geparst: ${allLines.length} (${allLines.map(l => `${l.name} $${l.price}`).slice(0,3).join(", ")})`);
+      if (allLines.length === 0) {
+        // Snapshot what's actually on the page for debugging
+        const pageSnippet = document.body.textContent.slice(0, 300).replace(/\s+/g, " ");
+        log("warn", `   Seiten-Inhalt (erste 300 Zeichen): ${pageSnippet}`);
+        throw new Error("Keine Shipping Lines gefunden");
+      }
 
       const cheapestLine = allLines.reduce((best, l) => (l.price < best.price ? l : best));
+      log("info", `   Günstigste Line: ${cheapestLine.name} — $${cheapestLine.price}`);
       groupResults.push({ items, cheapestLine, allLines });
 
       // 7. Navigate back
+      log("info", `   Navigiere zurück zum Warehouse...`);
       await navigateBack(agentConfig);
       await waitFor(() => warehousePresent(agentConfig), WAREHOUSE_RELOAD_TIMEOUT_MS, "warehouse");
+      log("info", `   Warehouse wieder sichtbar ✓`);
 
     } catch (err) {
+      log("error", `   Fehler: ${err.message}`);
       console.warn("[ReFlow] Simulation error:", err.message);
       dismissAnyDialog();
       try {
         window.history.back();
         await waitFor(() => warehousePresent(agentConfig), WAREHOUSE_RELOAD_TIMEOUT_MS, "warehouse recovery");
-      } catch (_) { /* best effort */ }
+        log("info", `   Warehouse nach Fehler wiederhergestellt`);
+      } catch (_) {
+        log("error", `   Warehouse-Recovery fehlgeschlagen`);
+      }
 
       return { candidate, groups: groupResults, totalPrice: 0, skipped: true };
     }

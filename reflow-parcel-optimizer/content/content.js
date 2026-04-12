@@ -102,7 +102,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             currentBest,
           });
         },
-        cancelToken
+        cancelToken,
+        (level, message) => {
+          chrome.runtime.sendMessage({
+            type: "SIMULATION_LOG",
+            level,   // "info" | "warn" | "error"
+            message,
+            ts: new Date().toLocaleTimeString("de-DE", { hour12: false }),
+          });
+        }
       ).then((result) => {
         showOverlay(result);
         sendResponse({ result: serializeOptimizationResult(result) });

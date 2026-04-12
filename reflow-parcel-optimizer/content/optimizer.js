@@ -187,29 +187,40 @@ function generateCandidates(items) {
  *
  * @param {import('./types').WarehouseItem[]} items
  * @param {Object}   agentConfig
- * @param {Function} simulateCandidate - async (candidate, agentConfig, cancelToken) => SimulationResult
+ * @param {Function} simulateCandidate - async (candidate, agentConfig, cancelToken, onLog) => SimulationResult
  * @param {Function} onProgress        - (done: number, total: number, currentBest: number|null) => void
  * @param {{ cancelled: boolean }} cancelToken
+ * @param {Function} [onLog]           - (level: string, message: string) => void
  * @returns {Promise<import('./types').OptimizationResult>}
  */
-async function runOptimization(items, agentConfig, simulateCandidate, onProgress, cancelToken) {
+async function runOptimization(items, agentConfig, simulateCandidate, onProgress, cancelToken, onLog) {
+  const log = onLog || (() => {});
   const candidates = generateCandidates(items);
   const results = [];
   let baseline = null;
 
+  log("info", `Optimizer: ${candidates.length} Kandidaten für ${items.length} Items`);
+
   for (let i = 0; i < candidates.length; i++) {
-    if (cancelToken.cancelled) break;
+    if (cancelToken.cancelled) { log("warn", "Optimierung abgebrochen"); break; }
 
     const currentBest = results.length > 0
       ? Math.min(...results.filter((r) => !r.skipped).map((r) => r.totalPrice))
       : null;
 
     onProgress(i, candidates.length, currentBest);
+    log("info", `── Kandidat ${i + 1}/${candidates.length}: ${candidates[i].label}`);
 
-    const result = await simulateCandidate(candidates[i], agentConfig, cancelToken);
+    const result = await simulateCandidate(candidates[i], agentConfig, cancelToken, log);
     results.push(result);
 
-    if (i === 0) baseline = result; // First candidate is always the baseline
+    if (result.skipped) {
+      log("warn", `   ↳ Übersprungen`);
+    } else {
+      log("info", `   ↳ Gesamt: $${result.totalPrice.toFixed(2)}`);
+    }
+
+    if (i === 0) baseline = result;
   }
 
   onProgress(candidates.length, candidates.length, null);
