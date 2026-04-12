@@ -228,7 +228,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       cancelToken = { cancelled: false };
 
       // Generate candidates (uses only id/weight — no DOM refs needed here)
-      const candidates = generateCandidates(selectedItems, { maxPackages: message.maxPackages || 2 });
+      const candidates = generateCandidates(selectedItems, {
+        maxPackages: message.maxPackages || 2,
+        mode:        message.mode        || "standard",
+      });
 
       // Serialize for the background (strip checkboxRef DOM elements)
       const serialized = candidates.map((c, i) => ({

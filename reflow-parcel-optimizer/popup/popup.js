@@ -39,8 +39,9 @@ const durationEstimate    = document.getElementById("duration-estimate");
 
 // ── App state ──────────────────────────────────────────────────────────────────
 
-let allItems      = [];   // WarehouseItem[] (serialized, no DOM refs)
-let selectedIds   = new Set();
+let allItems    = [];   // WarehouseItem[] (serialized, no DOM refs)
+let selectedIds = new Set();
+let currentMode = "standard"; // "fast" | "standard" | "thorough"
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,28 +61,18 @@ function formatWeight(grams) {
   return grams >= 1000 ? `${(grams / 1000).toFixed(2)} kg` : `${grams} g`;
 }
 
-// ── Duration estimate (mirrors optimizer.js logic — no content script needed) ─
+// ── Duration estimate (mirrors optimizer.js MODE_PER_K logic) ────────────────
 
-/**
- * Approximate candidate count for the given item count and maxPackages.
- * Mirrors the slot-budget logic in optimizer.js generateCandidates.
- */
-function estimateCandidateCount(n, maxPackages) {
+const MODE_PER_K_POPUP = { fast: 8, standard: 12, thorough: 20 };
+
+function estimateCandidateCount(n, maxPackages, mode) {
   if (n === 0) return 0;
   if (n === 1) return 1;
-  const budget = 99; // MAX_CANDIDATES - 1
-  let k2Budget, k3Budget, k4Budget;
-  if (maxPackages === 2) {
-    k2Budget = budget; k3Budget = 0; k4Budget = 0;
-  } else if (maxPackages === 3) {
-    k2Budget = Math.floor(budget * 0.55); k3Budget = budget - k2Budget; k4Budget = 0;
-  } else {
-    k2Budget = Math.floor(budget * 0.42); k3Budget = Math.floor(budget * 0.35); k4Budget = budget - k2Budget - k3Budget;
-  }
+  const perK     = MODE_PER_K_POPUP[mode] || 12;
   const k2Actual = n <= 18 ? Math.pow(2, n - 1) - 1 : 3000;
-  const k2Count  = Math.min(k2Budget, k2Actual);
-  const k3Count  = maxPackages >= 3 && n >= 3 ? k3Budget : 0;
-  const k4Count  = maxPackages >= 4 && n >= 4 ? k4Budget : 0;
+  const k2Count  = Math.min(perK, k2Actual);
+  const k3Count  = maxPackages >= 3 && n >= 3 ? perK : 0;
+  const k4Count  = maxPackages >= 4 && n >= 4 ? perK : 0;
   return 1 + k2Count + k3Count + k4Count;
 }
 
@@ -92,9 +83,9 @@ function formatDuration(candidateCount) {
 }
 
 function updateDurationEstimate() {
-  const n = selectedIds.size;
+  const n      = selectedIds.size;
   const maxPkg = parseInt(maxPackagesSelect.value) || 2;
-  const count  = estimateCandidateCount(n, maxPkg);
+  const count  = estimateCandidateCount(n, maxPkg, currentMode);
   durationEstimate.textContent = n > 0
     ? `${count} Kandidaten · ${formatDuration(count)}`
     : "";
@@ -311,7 +302,16 @@ selectNoneBtn.addEventListener("click", () => {
   startBtn.disabled = true;
 });
 
-maxPackagesSelect.addEventListener("change", () => {
+maxPackagesSelect.addEventListener("change", () => updateDurationEstimate());
+
+// Mode toggle buttons
+document.getElementById("opt-mode-group").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-mode]");
+  if (!btn) return;
+  currentMode = btn.dataset.mode;
+  document.querySelectorAll(".opt-mode-btn").forEach((b) =>
+    b.classList.toggle("active", b === btn)
+  );
   updateDurationEstimate();
 });
 
@@ -327,6 +327,7 @@ startBtn.addEventListener("click", async () => {
     type:            "START_OPTIMIZATION",
     selectedItemIds: Array.from(selectedIds),
     maxPackages,
+    mode:            currentMode,
   });
 
   if (response.error) {

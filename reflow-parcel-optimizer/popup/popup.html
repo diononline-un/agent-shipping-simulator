@@ -63,13 +63,22 @@
     </div>
 
     <div class="opt-settings">
-      <label class="opt-settings-label" for="max-packages-select">Max. Pakete</label>
-      <select id="max-packages-select" class="opt-packages-select">
-        <option value="2">2 Pakete</option>
-        <option value="3">3 Pakete</option>
-        <option value="4">4 Pakete</option>
-      </select>
-      <span id="duration-estimate" class="opt-duration"></span>
+      <div class="opt-settings-row">
+        <label class="opt-settings-label" for="max-packages-select">Pakete</label>
+        <select id="max-packages-select" class="opt-packages-select">
+          <option value="2">max. 2</option>
+          <option value="3">max. 3</option>
+          <option value="4">max. 4</option>
+        </select>
+        <div class="opt-mode-group" id="opt-mode-group">
+          <button class="opt-mode-btn" data-mode="fast"     title="8 Kandidaten/Paketstufe">⚡ Schnell</button>
+          <button class="opt-mode-btn active" data-mode="standard"  title="12 Kandidaten/Paketstufe">Normal</button>
+          <button class="opt-mode-btn" data-mode="thorough" title="20 Kandidaten/Paketstufe">🔍 Genau</button>
+        </div>
+      </div>
+      <div class="opt-estimate-row">
+        <span id="duration-estimate" class="opt-duration"></span>
+      </div>
     </div>
 
     <button id="start-optimization-btn" class="btn-primary" disabled>
