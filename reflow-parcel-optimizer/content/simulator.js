@@ -10,14 +10,29 @@
 
 /* global module */
 
-const SIMULATION_PAUSE_MS = 2000;
-const SHIPPING_PAGE_TIMEOUT_MS = 15000;
+const SIMULATION_PAUSE_MS        = 2000;
+const SHIPPING_PAGE_TIMEOUT_MS   = 15000;
 const WAREHOUSE_RELOAD_TIMEOUT_MS = 10000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Fires a synthetic click event that bubbles — required for Vue/React frameworks.
+ * Sets a checkbox's checked state in a Vue.js-compatible way.
+ * Vue v-model on checkboxes listens to 'change', not 'click'.
+ * @param {HTMLInputElement} el
+ * @param {boolean} checked
+ */
+function setCheckbox(el, checked) {
+  if (el.checked === checked) return;
+  el.checked = checked;
+  // Vue 2 uses 'change', Vue 3 uses 'input'; fire both plus click for safety
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  el.dispatchEvent(new Event("input",  { bubbles: true }));
+  el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+}
+
+/**
+ * Fires a synthetic click on a non-checkbox element.
  * @param {Element} el
  */
 function safeClick(el) {
@@ -39,16 +54,16 @@ function assertNotForbidden(el, forbiddenTexts) {
 }
 
 /**
- * Waits for a condition function to return truthy, polling every 200ms.
- * Rejects after `timeoutMs`.
+ * Waits for a condition function to return truthy, polling every 250ms.
  * @param {() => boolean} conditionFn
  * @param {number} timeoutMs
- * @param {string} label - for error messages
+ * @param {string} label
  * @returns {Promise<void>}
  */
 function waitFor(conditionFn, timeoutMs, label) {
   return new Promise((resolve, reject) => {
-    const start = Date.now();
+    if (conditionFn()) { resolve(); return; }
+    const start    = Date.now();
     const interval = setInterval(() => {
       if (conditionFn()) {
         clearInterval(interval);
@@ -57,135 +72,183 @@ function waitFor(conditionFn, timeoutMs, label) {
         clearInterval(interval);
         reject(new Error(`[ReFlow] Timeout waiting for: ${label}`));
       }
-    }, 200);
+    }, 250);
   });
 }
 
-/**
- * Waits until shipping line rows are present in the DOM.
- * @param {Object} agentConfig
- * @returns {Promise<void>}
- */
-function waitForShippingLines(agentConfig) {
-  return waitFor(
-    () => document.querySelectorAll(agentConfig.selectors.shippingLineRows).length > 0,
-    SHIPPING_PAGE_TIMEOUT_MS,
-    "shipping line table"
-  );
-}
-
-/**
- * Waits until the warehouse item containers are back in the DOM.
- * @param {Object} agentConfig
- * @returns {Promise<void>}
- */
-function waitForWarehouse(agentConfig) {
-  return waitFor(
-    () => document.querySelectorAll(agentConfig.selectors.itemContainer).length > 0,
-    WAREHOUSE_RELOAD_TIMEOUT_MS,
-    "warehouse item list"
-  );
-}
-
-/**
- * Pauses execution.
- * @param {number} ms
- */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ── Core simulation steps ─────────────────────────────────────────────────────
+// ── Dialog / error handling ───────────────────────────────────────────────────
 
 /**
- * Deselects all item checkboxes on the warehouse page.
- * @param {Object} agentConfig
+ * Detects common modal dialogs / error toasts and dismisses them.
+ * Handles GTBuy's "Select items for pickup" error and Element-UI dialogs.
+ * @returns {boolean} true if something was dismissed
  */
-function deselectAll(agentConfig) {
-  const selectAll = document.querySelector(agentConfig.selectors.selectAllCheckbox);
-  if (selectAll && selectAll.checked) {
-    safeClick(selectAll);
-  }
-  // Also explicitly uncheck each item checkbox to be safe
-  document.querySelectorAll(agentConfig.selectors.itemCheckbox).forEach((cb) => {
-    if (cb.checked) safeClick(cb);
-  });
-}
+function dismissAnyDialog() {
+  // Element-UI dialog close button
+  const elClose = document.querySelector(".el-dialog__headerbtn, .el-message-box__headerbtn");
+  if (elClose) { safeClick(elClose); return true; }
 
-/**
- * Selects only the checkboxes for the given items.
- * @param {import('./types').WarehouseItem[]} items
- */
-function selectItems(items) {
-  for (const item of items) {
-    if (item.checkboxRef && !item.checkboxRef.checked) {
-      safeClick(item.checkboxRef);
+  // Generic close buttons / overlays
+  const closeTexts = ["×", "✕", "✗", "Close", "Cancel", "OK", "确定"];
+  const allBtns = Array.from(
+    document.querySelectorAll("button, span[class*='close'], div[class*='close'], i[class*='close']")
+  );
+  for (const btn of allBtns) {
+    if (closeTexts.includes(btn.textContent.trim())) {
+      safeClick(btn);
+      return true;
     }
   }
+
+  // GTBuy "Select items for pickup" modal — look for ✕ in modal header
+  const modalX = document.querySelector(
+    ".modal .close, .dialog .close, [class*='modal'] button, [class*='dialog'] button"
+  );
+  if (modalX) { safeClick(modalX); return true; }
+
+  return false;
 }
 
 /**
- * Reads all shipping lines from the current (shipping selection) page.
+ * Returns true if a "please select items" error is currently visible.
+ */
+function isSelectItemsErrorVisible() {
+  const body = document.body.textContent || "";
+  return (
+    body.includes("Select items for pickup") ||
+    body.includes("请选择") ||
+    body.includes("Please select")
+  );
+}
+
+// ── Submit button finder ──────────────────────────────────────────────────────
+
+/**
+ * Finds the "Create Parcel" / "Submit for Delivery" button robustly.
+ * Tries configured selector first, then falls back to text matching.
+ * @param {Object} agentConfig
+ * @returns {Element|null}
+ */
+function findSubmitButton(agentConfig) {
+  // Try configured CSS selector
+  const bySel = document.querySelector(agentConfig.selectors.submitButton);
+  if (bySel) return bySel;
+
+  // Fallback: search by button text
+  const texts = ["Create Parcel", "Create Package", "Submit for Delivery", "Submit Parcel Request"];
+  const candidates = Array.from(
+    document.querySelectorAll("button, a, div[class*='btn'], div[class*='bor'], span[class*='btn']")
+  );
+  for (const text of texts) {
+    const found = candidates.find(
+      (el) => el.textContent.trim().toLowerCase() === text.toLowerCase()
+    );
+    if (found) return found;
+  }
+  return null;
+}
+
+// ── Shipping lines reader ─────────────────────────────────────────────────────
+
+/**
+ * Returns true when the shipping lines table is present AND has rows.
+ */
+function shippingLinesPresent(agentConfig) {
+  return document.querySelectorAll(agentConfig.selectors.shippingLineRows).length > 0;
+}
+
+/**
+ * Reads all shipping lines from the current page.
  * @param {Object} agentConfig
  * @returns {import('./types').ShippingLine[]}
  */
 function readShippingLines(agentConfig) {
   const { selectors, parsers } = agentConfig;
-  const rows = document.querySelectorAll(selectors.shippingLineRows);
+  const rows  = document.querySelectorAll(selectors.shippingLineRows);
   const lines = [];
 
   rows.forEach((row) => {
     const nameEl  = row.querySelector(selectors.shippingLineName);
     const priceEl = row.querySelector(selectors.shippingLinePrice);
     const daysEl  = row.querySelector(selectors.shippingLineDays);
-
     if (!nameEl || !priceEl) return;
 
     const name  = nameEl.textContent.trim();
     const price = parsers.price(priceEl.textContent.trim());
     const days  = daysEl ? daysEl.textContent.trim() : "N/A";
-
     if (!name || price <= 0) return;
 
-    lines.push({
-      name,
-      price,
-      currency: "USD",
-      estimatedDays: days,
-      features: [],
-    });
+    lines.push({ name, price, currency: "USD", estimatedDays: days, features: [] });
   });
 
   return lines;
 }
 
-/**
- * Navigates back to the warehouse page.
- * Tries history.back() first; falls back to a Cancel / Back button.
- * @param {Object} agentConfig
- * @returns {Promise<void>}
- */
-async function navigateBack(agentConfig) {
-  // Try to find a cancel/back button before using history.back
-  const allButtons = Array.from(document.querySelectorAll("button, a, div[role='button']"));
-  const backBtn = allButtons.find((el) => {
-    const t = (el.textContent || "").trim().toLowerCase();
-    return t === "cancel" || t === "back" || t === "返回";
-  });
+// ── Warehouse wait ────────────────────────────────────────────────────────────
 
-  if (backBtn) {
-    assertNotForbidden(backBtn, agentConfig.selectors.FORBIDDEN_BUTTON_TEXTS);
-    safeClick(backBtn);
+function warehousePresent(agentConfig) {
+  return document.querySelectorAll(agentConfig.selectors.itemContainer).length > 0;
+}
+
+async function navigateBack(agentConfig) {
+  // Look for explicit Back/Cancel link first
+  const allLinks = Array.from(document.querySelectorAll("button, a, span"));
+  const backEl   = allLinks.find((el) => {
+    const t = (el.textContent || "").trim().toLowerCase();
+    return t === "back" || t === "cancel" || t === "返回" || t === "取消";
+  });
+  if (backEl) {
+    assertNotForbidden(backEl, agentConfig.selectors.FORBIDDEN_BUTTON_TEXTS);
+    safeClick(backEl);
   } else {
     window.history.back();
   }
 }
 
+// ── Checkbox selection ────────────────────────────────────────────────────────
+
+/**
+ * Deselects all checkboxes on the warehouse page using Vue-compatible events.
+ * @param {Object} agentConfig
+ */
+async function deselectAll(agentConfig) {
+  // Uncheck "Select All" if checked
+  const selectAll = document.querySelector(agentConfig.selectors.selectAllCheckbox);
+  if (selectAll && selectAll.checked) {
+    setCheckbox(selectAll, false);
+    await sleep(300);
+  }
+
+  // Uncheck each item checkbox
+  document.querySelectorAll(agentConfig.selectors.itemCheckbox).forEach((cb) => {
+    if (cb.checked) setCheckbox(cb, false);
+  });
+
+  await sleep(300);
+}
+
+/**
+ * Selects only the given items' checkboxes.
+ * @param {import('./types').WarehouseItem[]} items
+ */
+async function selectItems(items) {
+  for (const item of items) {
+    if (item.checkboxRef && !item.checkboxRef.checked) {
+      setCheckbox(item.checkboxRef, true);
+      await sleep(80); // small gap between selections
+    }
+  }
+  await sleep(400); // let Vue re-render
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Simulates one parcel candidate: for each item group, selects items,
- * submits, reads shipping lines, and navigates back.
+ * Simulates one parcel candidate.
  *
  * @param {import('./types').ParcelCandidate} candidate
  * @param {Object} agentConfig
@@ -202,49 +265,70 @@ async function simulateCandidate(candidate, agentConfig, cancelToken) {
 
     try {
       // 1. Deselect everything
-      deselectAll(agentConfig);
+      await deselectAll(agentConfig);
 
-      // 2. Select only this group's items
-      selectItems(items);
+      // 2. Select this group's items
+      await selectItems(items);
 
-      // 3. Click the submit / create-parcel button
-      const submitBtn = document.querySelector(agentConfig.selectors.submitButton);
+      // Verify at least one checkbox is now checked before proceeding
+      const checkedCount = items.filter(
+        (i) => i.checkboxRef && i.checkboxRef.checked
+      ).length;
+
+      if (checkedCount === 0) {
+        throw new Error(
+          `[ReFlow] None of the ${items.length} checkboxes registered as checked. ` +
+          "Vue reactivity might require a different interaction method."
+        );
+      }
+
+      // 3. Find and click the submit button
+      const submitBtn = findSubmitButton(agentConfig);
       if (!submitBtn) throw new Error("[ReFlow] Submit button not found");
       assertNotForbidden(submitBtn, agentConfig.selectors.FORBIDDEN_BUTTON_TEXTS);
       safeClick(submitBtn);
 
-      // 4. Wait for shipping lines to load
-      await waitForShippingLines(agentConfig);
+      // 4. Short wait, then check for "select items" error dialog
+      await sleep(800);
+      if (isSelectItemsErrorVisible()) {
+        dismissAnyDialog();
+        await sleep(500);
+        throw new Error("[ReFlow] GTBuy: 'Select items for pickup' — checkboxes not registering");
+      }
 
-      // 5. Read all shipping lines
+      // 5. Wait for shipping lines
+      await waitFor(
+        () => shippingLinesPresent(agentConfig),
+        SHIPPING_PAGE_TIMEOUT_MS,
+        "shipping line table"
+      );
+
+      // 6. Read shipping lines
       const allLines = readShippingLines(agentConfig);
-      if (allLines.length === 0) throw new Error("[ReFlow] No shipping lines found after submit");
+      if (allLines.length === 0) throw new Error("[ReFlow] No shipping lines found");
 
       const cheapestLine = allLines.reduce((best, l) => (l.price < best.price ? l : best));
       groupResults.push({ items, cheapestLine, allLines });
 
-      // 6. Navigate back to warehouse
+      // 7. Navigate back
       await navigateBack(agentConfig);
-      await waitForWarehouse(agentConfig);
+      await waitFor(() => warehousePresent(agentConfig), WAREHOUSE_RELOAD_TIMEOUT_MS, "warehouse");
 
     } catch (err) {
-      console.warn("[ReFlow] Simulation error for group:", err.message);
-      // Try to get back to warehouse even on error
+      console.warn("[ReFlow] Simulation error:", err.message);
+      dismissAnyDialog();
       try {
         window.history.back();
-        await waitForWarehouse(agentConfig);
-      } catch (_) {
-        // Best effort
-      }
+        await waitFor(() => warehousePresent(agentConfig), WAREHOUSE_RELOAD_TIMEOUT_MS, "warehouse recovery");
+      } catch (_) { /* best effort */ }
+
       return { candidate, groups: groupResults, totalPrice: 0, skipped: true };
     }
 
-    // Rate limiting: pause between groups
     await sleep(SIMULATION_PAUSE_MS);
   }
 
   const totalPrice = groupResults.reduce((sum, g) => sum + (g.cheapestLine?.price || 0), 0);
-
   return { candidate, groups: groupResults, totalPrice, skipped: false };
 }
 

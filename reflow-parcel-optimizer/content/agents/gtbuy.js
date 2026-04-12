@@ -16,41 +16,40 @@ const gtbuyConfig = {
 
   selectors: {
     // ── Warehouse page ────────────────────────────────────────────────────────
-    // Each top-level div inside div.table-content represents one warehouse item.
+    // Verified from live screenshot: GTBuy uses a card layout per order.
+    // Each order card wraps a header row + product data row.
+    // The content-based scraper in scraper.js handles this automatically;
+    // these selectors are the CSS fast-path (may need per-deploy tuning).
     itemContainer: "div.table-content > div",
 
-    // Checkbox inside each item container row
+    // Checkbox inside each item container row (left of product image)
     itemCheckbox: "input[type='checkbox']",
 
-    // "Select All" footer checkbox
-    selectAllCheckbox: "div.all-select-footer input",
+    // "Select All" footer checkbox (bottom-left of warehouse page)
+    selectAllCheckbox: "div.all-select-footer input, .select-all input, footer input[type='checkbox']",
 
-    // Table cell selectors — column order per Blueprint Section 4.1:
-    // Col 1: thumbnail/name, Col 2: name text, Col 3: qty,
-    // Col 4: Weight(g), Col 5: Dimension(cm), Col 6: price,
-    // Col 7: Commodity Type
-    nameCell:      "td:nth-child(2)",
+    // Columns visible in live screenshot (content-based scraper used as fallback):
+    // Product Details | Warehousing Time | Quantity | Weight(g) | Dimension(cm) | Order Status | Commodity Type | Operate
+    nameCell:      "td:nth-child(1)",
     weightCell:    "td:nth-child(4)",
     dimensionCell: "td:nth-child(5)",
     categoryCell:  "td:nth-child(7)",
 
-    // Button that navigates to the parcel-creation / shipping-line page
-    submitButton: "div.bor-e2",
+    // "Create Parcel" orange button at bottom-right.
+    // Verified text from screenshot: "Create Parcel"
+    // div.bor-e2 is the Blueprint selector; text fallback is in simulator.js
+    submitButton: "div.bor-e2, .create-parcel-btn, button.submit-parcel",
 
     // ── Shipping line page (after submitButton click) ─────────────────────────
-    // Container selector for the "Mailing Route" table rows
-    shippingLineRows: "table tbody tr",
+    shippingLineRows: "table tbody tr, .shipping-line-list > div, .mailing-route tr",
 
-    // Within each shipping line row:
-    shippingLineName:  "td:nth-child(1)",  // Brand / Line name
-    shippingLinePrice: "td:nth-child(3)",  // Transportation Costs
-    shippingLineDays:  "td:nth-child(4)",  // Shipping Cycle (Business Day)
+    shippingLineName:  "td:nth-child(1)",
+    shippingLinePrice: "td:nth-child(3)",
+    shippingLineDays:  "td:nth-child(4)",
 
-    // Anchor text that marks the shipping-lines section has loaded
     shippingPageMarker: "Mailing Route",
 
     // ── Safety blacklist ──────────────────────────────────────────────────────
-    // Button text fragments that must NEVER be clicked by the extension.
     FORBIDDEN_BUTTON_TEXTS: ["Submit Parcel", "Confirm Order", "Place Order", "Pay Now"],
   },
 
