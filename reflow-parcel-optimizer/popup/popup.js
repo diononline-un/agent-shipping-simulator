@@ -172,6 +172,10 @@ chrome.runtime.onMessage.addListener((message) => {
       : "Kombinationen werden getestet";
   }
 
+  if (message.type === "OPTIMIZATION_COMPLETE") {
+    renderResults(message.result);
+  }
+
   if (message.type === "SIMULATION_LOG") {
     appendLog(message.level, message.message, message.ts);
     // Auto-open debug panel on errors so user sees problems immediately
@@ -281,9 +285,13 @@ startBtn.addEventListener("click", async () => {
     return;
   }
 
+  // Tab-based flow: response is { ok: true }.
+  // Results arrive asynchronously via OPTIMIZATION_COMPLETE message.
+  // Legacy direct flow: response.result contains the full result.
   if (response.result) {
     renderResults(response.result);
   }
+  // Otherwise stay in "running" state — OPTIMIZATION_COMPLETE will call renderResults.
 });
 
 stopBtn.addEventListener("click", async () => {

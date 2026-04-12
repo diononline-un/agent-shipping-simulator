@@ -307,6 +307,23 @@ async function simulateCandidate(candidate, agentConfig, cancelToken, onLog) {
     }
 
     try {
+      // 0. Re-scrape to refresh stale checkboxRefs after any prior navigation.
+      //    Vue recreates DOM elements on re-render; stored refs become detached.
+      if (typeof scrapeItems === "function") {
+        try {
+          const { items: fresh } = scrapeItems(agentConfig);
+          if (fresh.length > 0) {
+            const idToRef = new Map(fresh.map((i) => [i.id, i.checkboxRef]));
+            let refreshed = 0;
+            items.forEach((item) => {
+              const ref = idToRef.get(item.id);
+              if (ref) { item.checkboxRef = ref; refreshed++; }
+            });
+            log("info", `   DOM-Refs aufgefrischt: ${refreshed}/${items.length}`);
+          }
+        } catch (_) { /* scraper errors are non-fatal here */ }
+      }
+
       // 1. Deselect everything
       log("info", `   Deselektiere alle Checkboxen...`);
       await deselectAll(agentConfig);

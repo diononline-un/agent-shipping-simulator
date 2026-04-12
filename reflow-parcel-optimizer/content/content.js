@@ -1,18 +1,24 @@
 /**
  * ReFlow Parcel Optimizer — Content Script
  *
- * Entry point injected into agent websites.
- * - Detects agent and warehouse page
- * - Scrapes items and reports badge count
- * - Handles messages from the Popup / Background
- * - Runs optimization and manages the result overlay
+ * Two operating modes:
+ *
+ * A) Normal mode (warehouse tab the user has open):
+ *    - Detects agent and warehouse page
+ *    - Scrapes items and updates badge
+ *    - Handles GET_ITEMS / START_OPTIMIZATION / CANCEL_OPTIMIZATION messages
+ *    - START_OPTIMIZATION generates candidates and delegates to background
+ *      which opens task tabs (tab-based parallel simulation)
+ *
+ * B) Task tab mode (background-opened tabs):
+ *    - On load, asks background for its assigned candidate via GET_TAB_TASK
+ *    - Scrapes items, builds DOM-ref candidate, calls simulateCandidate
+ *    - Reports CANDIDATE_DONE / CANDIDATE_SKIP back to background
+ *    - Background closes the tab when done
  */
 
-// ── Load modules (all files are injected in order; in-extension they share scope)
-// In the extension context these are loaded via manifest content_scripts.
-// Order in manifest: agents/gtbuy.js → types.js → scraper.js → simulator.js → optimizer.js → content.js
-
-/* globals gtbuyConfig, scrapeItems, simulateCandidate, runOptimization */
+/* globals gtbuyConfig, scrapeItems, simulateCandidate, generateCandidates,
+           waitFor, warehousePresent, WAREHOUSE_RELOAD_TIMEOUT_MS */
 
 // ── Agent detection ───────────────────────────────────────────────────────────
 
@@ -27,9 +33,22 @@ function detectAgent() {
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-let activeAgent    = null;
-let cachedItems    = [];
-let cancelToken    = { cancelled: false };
+let activeAgent  = null;
+let cachedItems  = [];
+let cancelToken  = { cancelled: false };
+let isTaskTab    = false; // true when running as a background task tab
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function sendLog(level, message, candidateIndex) {
+  const prefix = candidateIndex != null ? `[K${candidateIndex + 1}] ` : "";
+  chrome.runtime.sendMessage({
+    type:    "SIMULATION_LOG",
+    level,
+    message: prefix + message,
+    ts:      new Date().toLocaleTimeString("de-DE", { hour12: false }),
+  }).catch(() => {});
+}
 
 // ── Initialization ────────────────────────────────────────────────────────────
 
@@ -37,23 +56,26 @@ function init() {
   activeAgent = detectAgent();
   if (!activeAgent) return;
 
+  // Check whether this tab was opened by the optimizer (task tab mode)
+  checkForTabTask();
+
   if (activeAgent.isWarehousePage(window.location.href)) {
     refreshItems();
   }
 
-  // Re-scrape when the URL changes (SPA navigation)
+  // Re-scrape when SPA navigates back to warehouse
   let lastUrl = window.location.href;
   const observer = new MutationObserver(() => {
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href;
-      if (activeAgent.isWarehousePage(lastUrl)) {
-        setTimeout(refreshItems, 800); // brief delay for SPA render
+      if (!isTaskTab && activeAgent.isWarehousePage(lastUrl)) {
+        setTimeout(refreshItems, 800);
       }
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Apply a pending split if one was stored (from "Open in Tab" flow)
+  // Apply a pending split stored from "Open in Tab" flow
   chrome.storage.session.get("reflow_split").then((data) => {
     if (data.reflow_split && activeAgent.isWarehousePage(window.location.href)) {
       setTimeout(() => applySplit(data.reflow_split), 1200);
@@ -69,10 +91,108 @@ function refreshItems() {
   chrome.runtime.sendMessage({ type: "ITEMS_DETECTED", count: items.length });
 }
 
+// ── Tab task mode ─────────────────────────────────────────────────────────────
+
+/**
+ * Asks the background service worker if this tab has an assigned candidate.
+ * If so, runs the simulation and reports back.
+ * Retries briefly to handle the race between tab creation and task registration.
+ */
+async function checkForTabTask() {
+  // Retry up to 5 times (2.5 s total) in case the tab loads before the
+  // background has registered the task for this tab ID.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const response = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "GET_TAB_TASK" }, (r) =>
+        resolve(r || {})
+      );
+    });
+
+    if (response.task) {
+      isTaskTab = true;
+      await runTabTask(response.task);
+      return;
+    }
+
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+/**
+ * Runs the candidate simulation assigned to this tab.
+ * Leverages simulateCandidate from simulator.js which handles all steps:
+ *   deselect → select → submit → wait for prices → navigate back.
+ *
+ * @param {{ candidateIndex:number, label:string, itemGroupIds:string[][] }} task
+ */
+async function runTabTask(task) {
+  const cfg = activeAgent;
+  const log = (level, msg) => sendLog(level, msg, task.candidateIndex);
+
+  try {
+    // Wait for warehouse to be fully ready (Vue initialized)
+    await waitFor(() => warehousePresent(cfg), WAREHOUSE_RELOAD_TIMEOUT_MS, "warehouse init");
+    await new Promise((r) => setTimeout(r, 1500)); // extra settle time for Vue
+
+    // Scrape for fresh DOM refs
+    const { items: freshItems } = scrapeItems(cfg);
+    const idToItem = new Map(freshItems.map((i) => [i.id, i]));
+
+    // Build a proper candidate object with live checkboxRefs
+    const candidate = {
+      label:      task.label,
+      itemGroups: task.itemGroupIds.map((ids) =>
+        ids.map((id) => idToItem.get(id)).filter(Boolean)
+      ),
+    };
+
+    const totalExpected = task.itemGroupIds.reduce((s, g) => s + g.length, 0);
+    const totalFound    = candidate.itemGroups.reduce((s, g) => s + g.length, 0);
+    if (totalFound < totalExpected) {
+      log("warn", `${totalExpected - totalFound} Items nicht im Scrape gefunden (${totalFound}/${totalExpected})`);
+    }
+
+    const taskCancelToken = { cancelled: false };
+
+    // simulateCandidate handles all groups sequentially (deselect/select/submit/read/back)
+    const result = await simulateCandidate(candidate, cfg, taskCancelToken, log);
+
+    if (result.skipped) {
+      chrome.runtime.sendMessage({
+        type:           "CANDIDATE_SKIP",
+        candidateIndex: task.candidateIndex,
+        label:          task.label,
+      }).catch(() => {});
+    } else {
+      chrome.runtime.sendMessage({
+        type:           "CANDIDATE_DONE",
+        candidateIndex: task.candidateIndex,
+        label:          task.label,
+        totalPrice:     result.totalPrice,
+        // Strip DOM refs — only IDs + shipping data cross the message boundary
+        groups: result.groups.map((g) => ({
+          itemIds:      (g.items || []).map((i) => i.id),
+          cheapestLine: g.cheapestLine,
+          allLines:     g.allLines,
+        })),
+      }).catch(() => {});
+    }
+
+  } catch (err) {
+    log("error", `Unerwarteter Fehler im Task-Tab: ${err.message}`);
+    chrome.runtime.sendMessage({
+      type:           "CANDIDATE_SKIP",
+      candidateIndex: task.candidateIndex,
+      label:          task.label,
+    }).catch(() => {});
+  }
+}
+
 // ── Message handlers ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
+
     case "GET_ITEMS": {
       refreshItems();
       sendResponse({ items: serializeItems(cachedItems) });
@@ -80,7 +200,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     case "START_OPTIMIZATION": {
-      const selectedIds = new Set(message.selectedItemIds || cachedItems.map((i) => i.id));
+      const selectedIds   = new Set(message.selectedItemIds || cachedItems.map((i) => i.id));
       const selectedItems = cachedItems.filter((i) => selectedIds.has(i.id));
 
       if (selectedItems.length === 0) {
@@ -90,39 +210,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       cancelToken = { cancelled: false };
 
-      runOptimization(
-        selectedItems,
-        activeAgent,
-        simulateCandidate,
-        (done, total, currentBest) => {
-          chrome.runtime.sendMessage({
-            type: "OPTIMIZATION_PROGRESS",
-            done,
-            total,
-            currentBest,
-          });
-        },
-        cancelToken,
-        (level, message) => {
-          chrome.runtime.sendMessage({
-            type: "SIMULATION_LOG",
-            level,   // "info" | "warn" | "error"
-            message,
-            ts: new Date().toLocaleTimeString("de-DE", { hour12: false }),
-          });
-        }
-      ).then((result) => {
-        showOverlay(result);
-        sendResponse({ result: serializeOptimizationResult(result) });
-      }).catch((err) => {
-        sendResponse({ error: err.message });
-      });
+      // Generate candidates (uses only id/weight — no DOM refs needed here)
+      const candidates = generateCandidates(selectedItems);
 
-      return true; // Keep message channel open for async response
+      // Serialize for the background (strip checkboxRef DOM elements)
+      const serialized = candidates.map((c, i) => ({
+        candidateIndex:   i,
+        label:            c.label,
+        itemGroupIds:     c.itemGroups.map((g) => g.map((item) => item.id)),
+        // Item names travel alongside IDs so results can be enriched later
+        itemGroupDetails: c.itemGroups.map((g) =>
+          g.map((item) => ({ id: item.id, name: item.name }))
+        ),
+      }));
+
+      // Delegate to background — it opens the task tabs and coordinates results
+      chrome.runtime.sendMessage({ type: "START_TAB_OPTIMIZATION", candidates: serialized })
+        .catch(() => {});
+
+      // Respond immediately; actual results arrive via OPTIMIZATION_COMPLETE
+      sendResponse({ ok: true });
+      break;
     }
 
     case "CANCEL_OPTIMIZATION": {
       cancelToken.cancelled = true;
+      chrome.runtime.sendMessage({ type: "CANCEL_TAB_OPTIMIZATION" }).catch(() => {});
       removeOverlay();
       sendResponse({ ok: true });
       break;
@@ -134,6 +247,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
     }
 
+    case "OPTIMIZATION_COMPLETE": {
+      // Show the result overlay on the warehouse page the user has open
+      if (!isTaskTab) showOverlay(message.result);
+      break;
+    }
+
     default:
       break;
   }
@@ -142,14 +261,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 // ── Split application ─────────────────────────────────────────────────────────
 
 /**
- * Sets checkboxes in the DOM for the first group in itemGroups.
- * (User then manually submits the first parcel.)
- * @param {string[][]} itemGroups - Arrays of item IDs
+ * Pre-selects the first parcel group's items in the warehouse DOM.
+ * @param {string[][]} itemGroups  - Arrays of item IDs
  */
 function applySplit(itemGroups) {
   if (!itemGroups || itemGroups.length === 0) return;
 
-  // Deselect all first
+  // Deselect all
   const selectAll = document.querySelector(activeAgent.selectors.selectAllCheckbox);
   if (selectAll && selectAll.checked) {
     selectAll.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -176,13 +294,13 @@ function removeOverlay() {
 
 /**
  * Injects the result overlay into the page.
- * @param {import('./types').OptimizationResult} result
+ * @param {{ topThree: object[], savings: number }} result
  */
 function showOverlay(result) {
   removeOverlay();
-  if (!result || result.topThree.length === 0) return;
+  if (!result || !result.topThree || result.topThree.length === 0) return;
 
-  const best = result.topThree[0];
+  const best        = result.topThree[0];
   const savingsText = result.savings > 0
     ? `<span class="reflow-savings">Spare $${result.savings.toFixed(2)} vs. 1 Paket</span>`
     : "";
@@ -191,7 +309,7 @@ function showOverlay(result) {
     <div class="reflow-parcel-group">
       <div class="reflow-parcel-title">Paket ${idx + 1} — ${g.cheapestLine.name}</div>
       <div class="reflow-parcel-price">$${g.cheapestLine.price.toFixed(2)} · ${g.cheapestLine.estimatedDays} Tage</div>
-      <div class="reflow-parcel-items">${g.items.map((i) => i.name).join(", ")}</div>
+      <div class="reflow-parcel-items">${(g.items || []).map((i) => i.name).join(", ")}</div>
     </div>
   `).join("");
 
@@ -203,7 +321,7 @@ function showOverlay(result) {
   `).join("");
 
   const overlay = document.createElement("div");
-  overlay.id = "reflow-overlay";
+  overlay.id    = "reflow-overlay";
   overlay.innerHTML = `
     <div class="reflow-overlay-inner">
       <button class="reflow-close" id="reflow-close-btn" title="Schließen">✕</button>
@@ -231,45 +349,24 @@ function showOverlay(result) {
   document.getElementById("reflow-close-btn").addEventListener("click", removeOverlay);
 
   document.getElementById("reflow-apply-btn").addEventListener("click", () => {
-    applySplit(best.groups.map((g) => g.items.map((i) => i.id)));
+    applySplit(best.groups.map((g) => (g.items || []).map((i) => i.id)));
     removeOverlay();
   });
 
   document.getElementById("reflow-tab-btn").addEventListener("click", () => {
     chrome.runtime.sendMessage({
-      type: "OPEN_IN_TAB",
-      itemGroups: best.groups.map((g) => g.items.map((i) => i.id)),
+      type:       "OPEN_IN_TAB",
+      itemGroups: best.groups.map((g) => (g.items || []).map((i) => i.id)),
     });
   });
 }
 
-// ── Serialization (DOM elements can't cross message boundary) ─────────────────
+// ── Serialization ─────────────────────────────────────────────────────────────
 
 function serializeItems(items) {
   return items.map(({ id, name, weight, dimensions, quantity, category }) => ({
     id, name, weight, dimensions, quantity, category,
   }));
-}
-
-function serializeOptimizationResult(result) {
-  const serializeGroup = (g) => ({
-    items: serializeItems(g.items),
-    cheapestLine: g.cheapestLine,
-    allLines: g.allLines,
-  });
-
-  const serializeResult = (r) => ({
-    candidate: { label: r.candidate.label },
-    groups: r.groups.map(serializeGroup),
-    totalPrice: r.totalPrice,
-    skipped: r.skipped || false,
-  });
-
-  return {
-    baseline: result.baseline ? serializeResult(result.baseline) : null,
-    topThree: result.topThree.map(serializeResult),
-    savings: result.savings,
-  };
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
