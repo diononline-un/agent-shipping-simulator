@@ -10,7 +10,7 @@
  *   6. Closes all task tabs when done
  */
 
-const CONCURRENCY         = 5;    // max simultaneous task tabs
+const CONCURRENCY         = 1;    // sequential tabs — prevents cross-tab price contamination on GTBuy SPA
 const TAB_STAGGER_MS      = 400;  // ms between tab opens (GTBuy rate-limit friendliness)
 const GTBUY_WAREHOUSE_URL = "https://gtbuy.com/user/warehouse";
 
@@ -28,6 +28,13 @@ const GTBUY_WAREHOUSE_URL = "https://gtbuy.com/user/warehouse";
  * } | null}
  */
 let optState = null;
+
+/**
+ * Maps tabId → item ID array for tabs opened via "In Tab öffnen".
+ * One entry per group: each tab pre-selects its own group's items.
+ * @type {Map<number, string[]>}
+ */
+const splitTasks = new Map();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -64,14 +71,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // keep channel open for async response
   }
 
-  // "Open in Tab" flow (from popup result card or overlay)
+  // "Open in Tab" flow — opens one tab per group; each tab pre-selects its group's items.
   if (message.type === "OPEN_IN_TAB") {
-    chrome.storage.session
-      .set({ reflow_split: message.itemGroups })
-      .then(() => chrome.tabs.create({ url: GTBUY_WAREHOUSE_URL }))
+    const itemGroups = message.itemGroups || []; // string[][]
+    Promise.all(
+      itemGroups.map((groupIds, idx) =>
+        chrome.tabs.create({ url: GTBUY_WAREHOUSE_URL, active: idx === 0 })
+          .then((tab) => { splitTasks.set(tab.id, groupIds); })
+      )
+    )
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ error: e.message }));
     return true;
+  }
+
+  // Content script in a split tab asks which items to pre-select.
+  if (message.type === "GET_SPLIT_TASK") {
+    const tabId   = sender.tab?.id;
+    const itemIds = tabId ? (splitTasks.get(tabId) ?? null) : null;
+    if (itemIds !== null) splitTasks.delete(tabId); // consume so it isn't applied twice
+    sendResponse({ itemIds });
+    return;
   }
 
   // ── Tab-based optimization ─────────────────────────────────────────────────

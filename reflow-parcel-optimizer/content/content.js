@@ -61,6 +61,8 @@ function init() {
 
   if (activeAgent.isWarehousePage(window.location.href)) {
     refreshItems();
+    // Check if this tab was opened by "In Tab öffnen" and has a group to pre-select
+    checkForSplitTask();
   }
 
   // Re-scrape when SPA navigates back to warehouse
@@ -74,14 +76,6 @@ function init() {
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
-
-  // Apply a pending split stored from "Open in Tab" flow
-  chrome.storage.session.get("reflow_split").then((data) => {
-    if (data.reflow_split && activeAgent.isWarehousePage(window.location.href)) {
-      setTimeout(() => applySplit(data.reflow_split), 1200);
-      chrome.storage.session.remove("reflow_split");
-    }
-  });
 }
 
 function refreshItems() {
@@ -89,6 +83,29 @@ function refreshItems() {
   cachedItems = items;
   if (error) console.warn(error);
   chrome.runtime.sendMessage({ type: "ITEMS_DETECTED", count: items.length });
+}
+
+// ── Split task mode (tabs opened via "In Tab öffnen") ────────────────────────
+
+/**
+ * Asks the background if this tab has an assigned item group to pre-select.
+ * Called once per warehouse page load.  If the tab was opened by "In Tab öffnen"
+ * the background returns the relevant item IDs; otherwise returns null immediately.
+ */
+async function checkForSplitTask() {
+  const response = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "GET_SPLIT_TASK" }, (r) => resolve(r || {}));
+  });
+
+  if (!response.itemIds || response.itemIds.length === 0) return;
+
+  // Wait for Vue warehouse to be fully ready before clicking checkboxes
+  try {
+    await waitFor(() => warehousePresent(activeAgent), WAREHOUSE_RELOAD_TIMEOUT_MS, "warehouse for split");
+    await new Promise((r) => setTimeout(r, 1500));
+  } catch (_) { /* proceed anyway — applySplit will attempt with whatever is in the DOM */ }
+
+  applySplit([response.itemIds]);
 }
 
 // ── Tab task mode ─────────────────────────────────────────────────────────────
@@ -262,10 +279,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 /**
  * Pre-selects the first parcel group's items in the warehouse DOM.
+ * Refreshes DOM refs first to avoid clicking on Vue-detached elements.
  * @param {string[][]} itemGroups  - Arrays of item IDs
  */
 function applySplit(itemGroups) {
   if (!itemGroups || itemGroups.length === 0) return;
+
+  // Re-scrape so we always have live checkboxRef elements (Vue may have re-rendered)
+  refreshItems();
 
   // Deselect all
   const selectAll = document.querySelector(activeAgent.selectors.selectAllCheckbox);
